@@ -8,7 +8,7 @@ const TRAITS = [
   { key: 'formality', label: 'FORMALITY' },
 ];
 
-const PRESETS = ['default', 'unhinged', 'professional', 'tired friend'];
+const DEFAULT_PRESETS = ['default', 'unhinged', 'professional', 'tired friend'];
 
 function describeTrait(key, value) {
   if (key === 'curiosity') {
@@ -39,9 +39,10 @@ function describeTrait(key, value) {
 const sliderTrack = (value) =>
   `linear-gradient(to right, var(--mint) ${value}%, var(--border) ${value}%)`;
 
-export default function PersonalityPanel({ traits, onChange, onPreset }) {
+export default function PersonalityPanel({ traits, presets, onChange, onPreset }) {
   const [activePreset, setActivePreset] = useState(null);
   const current = traits ?? {};
+  const presetList = Array.isArray(presets) && presets.length ? presets : DEFAULT_PRESETS;
 
   const updateTrait = (key, value) => {
     setActivePreset(null);
@@ -60,7 +61,7 @@ export default function PersonalityPanel({ traits, onChange, onPreset }) {
       </div>
       <div className="panel__body">
         <div className="trait-presets">
-          {PRESETS.map((preset) => (
+          {presetList.map((preset) => (
             <button
               key={preset}
               type="button"

@@ -103,12 +103,19 @@ def is_prompt_safe_memory(
     if memory_type in PROMPT_BLOCKED_MEMORY_TYPES:
         return False
 
+    role = str(memory.get("role") or "").strip().lower()
     content = str(memory.get("content", "")).lower()
-    assistant_part = content.split("emiya:", 1)[-1].strip() if "emiya:" in content else content
+    if role == "assistant":
+        assistant_part = content
+    elif role == "user":
+        assistant_part = ""
+    else:
+        assistant_part = content.split("emiya:", 1)[-1].strip() if "emiya:" in content else content
     if any(pattern in assistant_part for pattern in PROMPT_BLOCKED_PATTERNS):
         return False
 
-    if len(assistant_part) > 260:
+    length_target = assistant_part or content
+    if len(length_target) > 260:
         return False
 
     return True
@@ -181,8 +188,10 @@ def _format_memory(memory: Memory | dict[str, Any]) -> str:
         memory = memory.to_dict()
     timestamp = escape(str(memory.get("timestamp", "")))
     memory_type = escape(str(memory.get("type", "memory")))
+    role = str(memory.get("role") or "").strip()
+    label = f"{memory_type}/{escape(role)}" if role else memory_type
     content = escape(_clean_memory_content(str(memory.get("content", ""))))
-    return f"- [{timestamp}] {memory_type}: {content}"
+    return f"- [{timestamp}] {label}: {content}"
 
 
 def _block(

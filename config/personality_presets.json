@@ -1,0 +1,30 @@
+{
+  "default": {
+    "curiosity": 70,
+    "bluntness": 80,
+    "warmth": 40,
+    "sarcasm": 60,
+    "formality": 20
+  },
+  "unhinged": {
+    "curiosity": 90,
+    "bluntness": 95,
+    "warmth": 25,
+    "sarcasm": 90,
+    "formality": 10
+  },
+  "professional": {
+    "curiosity": 55,
+    "bluntness": 70,
+    "warmth": 45,
+    "sarcasm": 25,
+    "formality": 70
+  },
+  "tired friend": {
+    "curiosity": 45,
+    "bluntness": 75,
+    "warmth": 55,
+    "sarcasm": 45,
+    "formality": 10
+  }
+}

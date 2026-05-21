@@ -19,6 +19,8 @@ class Memory:
     mood_snapshot: dict[str, Any]
     importance: float
     tags: list[str]
+    role: str | None = None
+    turn_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -29,6 +31,8 @@ class Memory:
             "mood_snapshot": self.mood_snapshot,
             "importance": self.importance,
             "tags": self.tags,
+            "role": self.role,
+            "turn_id": self.turn_id,
         }
 
 
@@ -73,6 +77,13 @@ class MemoryStore:
         conn.row_factory = sqlite3.Row
         return conn
 
+    def _ensure_columns(self, conn: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(memories)").fetchall()}
+        if "role" not in columns:
+            conn.execute("ALTER TABLE memories ADD COLUMN role TEXT")
+        if "turn_id" not in columns:
+            conn.execute("ALTER TABLE memories ADD COLUMN turn_id TEXT")
+
     def init_schema(self) -> None:
         conn = self._connect()
         try:
@@ -85,13 +96,18 @@ class MemoryStore:
                     content       TEXT NOT NULL,
                     mood_snapshot TEXT,
                     importance    REAL DEFAULT 0.5,
-                    tags          TEXT
+                    tags          TEXT,
+                    role          TEXT,
+                    turn_id       TEXT
                 )
                 """
             )
+            self._ensure_columns(conn)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type, id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_timestamp ON memories(timestamp)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_content ON memories(content)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_role ON memories(role, id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_turn ON memories(turn_id)")
             conn.commit()
         finally:
             conn.close()
@@ -104,12 +120,16 @@ class MemoryStore:
         importance: float = 0.5,
         tags: list[str] | None = None,
         timestamp: str | None = None,
+        role: str | None = None,
+        turn_id: str | None = None,
     ) -> int:
         if memory_type not in MEMORY_TYPES:
             raise ValueError(f"unknown memory type: {memory_type}")
         text = content.strip()
         if not text:
             raise ValueError("memory content cannot be empty")
+        clean_role = role.strip().lower() if isinstance(role, str) and role.strip() else None
+        clean_turn_id = turn_id.strip() if isinstance(turn_id, str) and turn_id.strip() else None
 
         self.init_schema()
         importance = max(0.0, min(1.0, float(importance)))
@@ -118,8 +138,8 @@ class MemoryStore:
             cur = conn.execute(
                 """
                 INSERT INTO memories (
-                    timestamp, type, content, mood_snapshot, importance, tags
-                ) VALUES (?,?,?,?,?,?)
+                    timestamp, type, content, mood_snapshot, importance, tags, role, turn_id
+                ) VALUES (?,?,?,?,?,?,?,?)
                 """,
                 (
                     timestamp or datetime.now().isoformat(timespec="seconds"),
@@ -128,6 +148,8 @@ class MemoryStore:
                     json.dumps(mood_snapshot or {}, ensure_ascii=False),
                     importance,
                     json.dumps(tags or [], ensure_ascii=False),
+                    clean_role,
+                    clean_turn_id,
                 ),
             )
             memory_id = int(cur.lastrowid)
@@ -189,4 +211,6 @@ class MemoryStore:
             mood_snapshot=_json_loads(row["mood_snapshot"], {}),
             importance=float(row["importance"] or 0.5),
             tags=_json_loads(row["tags"], []),
+            role=row["role"] if "role" in row.keys() else None,
+            turn_id=row["turn_id"] if "turn_id" in row.keys() else None,
         )

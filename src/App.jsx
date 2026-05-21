@@ -46,6 +46,7 @@ import './styles/bios.css';
 import './styles/crt.css';
 
 const WS_URL = 'ws://localhost:7474';
+const TELEMETRY_WS_URL = `${WS_URL}/ws/telemetry`;
 
 const TABS = [
   { id: 'monitor',  label: 'MONITOR'  },
@@ -61,6 +62,8 @@ const DEFAULT_TRAITS = {
   sarcasm: 60,
   formality: 20,
 };
+
+const DEFAULT_PERSONALITY_PRESETS = ['default', 'unhinged', 'professional', 'tired friend'];
 
 const hasNumber = (v) => typeof v === 'number' && Number.isFinite(v);
 
@@ -119,6 +122,7 @@ export default function App() {
   /* ─── connection ─── */
   const [connected, setConnected] = useState(false);
   const wsRef = useRef(null);
+  const telemetryConnectedRef = useRef(false);
 
   /* ─── L1 activity tracking ─── */
   const [l1Status,  setL1Status]  = useState('awaiting');
@@ -136,6 +140,7 @@ export default function App() {
   const [influence,     setInfluence]     = useState([]);
   const [moodHistory,   setMoodHistory]   = useState([]);
   const [traits,        setTraits]        = useState(DEFAULT_TRAITS);
+  const [personalityPresets, setPersonalityPresets] = useState(DEFAULT_PERSONALITY_PRESETS);
   const [pipeline,      setPipeline]      = useState([]);
 
   /* ─── chat ─── */
@@ -202,7 +207,8 @@ export default function App() {
             if (typeof active === 'number') setActiveMinutes(active);
             if (payload.influence)    setInfluence(payload.influence);
             if (payload.traits)       setTraits((current) => ({ ...current, ...payload.traits }));
-            if (payload.pipeline)     setPipeline(payload.pipeline);
+            if (Array.isArray(payload.personality_presets)) setPersonalityPresets(payload.personality_presets);
+            if (payload.pipeline && !telemetryConnectedRef.current) setPipeline(payload.pipeline);
 
             const autonomous = toTriggerEvent(payload.emiya, payload.timestamp);
             if (autonomous) {
@@ -284,6 +290,54 @@ export default function App() {
 
     return () => {
       cancelled = true;
+      clearTimeout(reconnectTimer);
+      if (ws) ws.close();
+    };
+  }, []);
+
+  /* pipeline telemetry channel */
+  useEffect(() => {
+    let ws;
+    let reconnectTimer;
+    let cancelled = false;
+
+    const connect = () => {
+      if (cancelled) return;
+      ws = new WebSocket(TELEMETRY_WS_URL);
+
+      ws.onopen = () => {
+        telemetryConnectedRef.current = true;
+        ws.send(JSON.stringify({ type: 'telemetry_request' }));
+      };
+
+      ws.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (data.type === 'telemetry_update' && Array.isArray(data.pipeline)) {
+            setPipeline(data.pipeline);
+          }
+        } catch (err) {
+          console.error('[telemetry] parse error', err);
+        }
+      };
+
+      ws.onclose = () => {
+        telemetryConnectedRef.current = false;
+        if (!cancelled) {
+          reconnectTimer = setTimeout(connect, 3000);
+        }
+      };
+
+      ws.onerror = (err) => {
+        console.error('[telemetry] error', err);
+      };
+    };
+
+    connect();
+
+    return () => {
+      cancelled = true;
+      telemetryConnectedRef.current = false;
       clearTimeout(reconnectTimer);
       if (ws) ws.close();
     };
@@ -402,6 +456,7 @@ export default function App() {
           <MoodInfluence events={influence} />
           <PersonalityPanel
             traits={traits}
+            presets={personalityPresets}
             onChange={handleTraitsChange}
             onPreset={handleTraitsPreset}
           />

@@ -235,10 +235,16 @@ def chat(messages: list, context: dict = None, return_metadata: bool = False) ->
             print(f"[L1] Ollama HTTP {response.status_code}: {response.text[:500]}")
             return None
 
-        raw_text = response.json().get("message", {}).get("content", "").strip()
+        payload = response.json()
+        raw_text = payload.get("message", {}).get("content", "").strip()
         visible_text, thought = split_thinking(raw_text)
         cleaned = _clean(visible_text)
         if return_metadata:
+            eval_count = payload.get("eval_count")
+            eval_duration = payload.get("eval_duration")
+            tokens_per_second = None
+            if eval_count and eval_duration:
+                tokens_per_second = round(float(eval_count) / (float(eval_duration) / 1_000_000_000), 2)
             return {
                 "content": cleaned,
                 "thought": thought,
@@ -246,6 +252,15 @@ def chat(messages: list, context: dict = None, return_metadata: bool = False) ->
                 "model": MODEL,
                 "mood_seed": options.get("seed"),
                 "system_prompt": system,
+                "metrics": {
+                    "total_duration": payload.get("total_duration"),
+                    "load_duration": payload.get("load_duration"),
+                    "prompt_eval_count": payload.get("prompt_eval_count"),
+                    "prompt_eval_duration": payload.get("prompt_eval_duration"),
+                    "eval_count": eval_count,
+                    "eval_duration": eval_duration,
+                    "tokens_per_second": tokens_per_second,
+                },
             }
         return cleaned
 

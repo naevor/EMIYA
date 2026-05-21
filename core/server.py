@@ -19,13 +19,14 @@ from monitor.system_tracker import SystemTracker
 from monitor.trigger_engine import TriggerEngine
 from monitor.window_tracker import WindowTracker, get_app_time, get_switch_count
 from mood.engine import MoodEngine
-from personality.traits import TRAIT_KEYS, apply_preset, load_traits, save_traits
+from personality.traits import TRAIT_KEYS, apply_preset, load_presets, load_traits, save_traits
 from telemetry.pipeline_log import pipeline_logger
 
 
 HOST = "localhost"
 PORT = 7474
 BROADCAST_INTERVAL = 0.1
+TELEMETRY_INTERVAL = 0.5
 MONITOR_INTERVAL = 5.0
 
 GRINDING_MINUTES = 120
@@ -76,9 +77,12 @@ class EmiyaServer:
         self.memory_writes_enabled = env_flag("EMIYA_MEMORY_WRITES", default=True)
         self.memory_writer = MemoryWriter(self.memory_store, enabled=self.memory_writes_enabled)
         self.memory_retriever = MemoryRetriever(self.memory_store)
+        self.pipeline_dump_enabled = env_flag("EMIYA_PIPELINE_DUMP", default=False)
         self.traits = load_traits()
+        self.personality_presets = load_presets()
         self.last_sys = {}
         self.clients = set()
+        self.telemetry_clients = set()
         self.pending_message = None
         self.chat_history = []
         self._l1 = None
@@ -193,6 +197,7 @@ class EmiyaServer:
                     model = result.get("model")
                     system_prompt = result.get("system_prompt")
                     mood_seed = result.get("mood_seed")
+                    metrics = result.get("metrics")
                 else:
                     response = result
                     thought = None
@@ -200,6 +205,7 @@ class EmiyaServer:
                     model = None
                     system_prompt = None
                     mood_seed = None
+                    metrics = None
 
                 pipeline_logger.add_step(
                     turn_id,
@@ -208,6 +214,9 @@ class EmiyaServer:
                     details={
                         "model": model,
                         "mood_seed": mood_seed,
+                        "metrics": metrics,
+                        "thought": thought,
+                        "raw_response": raw_response,
                         "system_prompt": system_prompt,
                     },
                 )
@@ -230,13 +239,14 @@ class EmiyaServer:
                         response,
                         mood_snapshot=context.get("mood"),
                         tags=["l1"],
+                        turn_id=turn_id,
                     )
                     pipeline_logger.add_step(
                         turn_id,
                         "OUT",
                         details={"chars": len(response), "source": "l1"},
                     )
-                    pipeline_logger.finish_request(turn_id, "ok")
+                    pipeline_logger.finish_request(turn_id, "ok", dump=self.pipeline_dump_enabled)
                     return response
             except Exception as e:
                 print(f"[L1] error: {e}")
@@ -256,9 +266,10 @@ class EmiyaServer:
             mood_snapshot=mood,
             importance=0.2,
             tags=["fallback"],
+            turn_id=turn_id,
         )
         pipeline_logger.add_step(turn_id, "OUT", details={"chars": 3, "source": "fallback"})
-        pipeline_logger.finish_request(turn_id, "fallback")
+        pipeline_logger.finish_request(turn_id, "fallback", dump=self.pipeline_dump_enabled)
         return "..."
 
     def _build_context(self, user_text: str | None = None) -> dict:
@@ -339,6 +350,7 @@ class EmiyaServer:
             "memory": {"writes_enabled": self.memory_writes_enabled},
             "emiya": self.pending_message,
             "traits": self.traits.to_dict(),
+            "personality_presets": list(self.personality_presets.keys()),
             "pipeline": pipeline_logger.recent(20, compact=True),
             "mood": {
                 "x": round(mood_state.x, 4),
@@ -369,11 +381,55 @@ class EmiyaServer:
             return_exceptions=True,
         )
 
+    def build_telemetry_packet(self):
+        return {
+            "type": "telemetry_update",
+            "timestamp": datetime.now().isoformat(timespec="milliseconds"),
+            "pipeline": pipeline_logger.recent(100, compact=False),
+        }
+
+    async def broadcast_telemetry(self):
+        if not self.telemetry_clients:
+            return
+        msg = json.dumps(self.build_telemetry_packet(), ensure_ascii=False)
+        await asyncio.gather(
+            *[client.send(msg) for client in self.telemetry_clients],
+            return_exceptions=True,
+        )
+
     def _update_traits(self, patch: dict) -> None:
         clean_patch = {key: patch[key] for key in TRAIT_KEYS if key in patch}
         self.traits = save_traits(self.traits.updated(clean_patch))
 
+    @staticmethod
+    def _websocket_path(websocket) -> str:
+        request = getattr(websocket, "request", None)
+        if request is not None:
+            path = getattr(request, "path", None)
+            if path:
+                return path
+        return getattr(websocket, "path", "/") or "/"
+
+    async def telemetry_handler(self, websocket):
+        self.telemetry_clients.add(websocket)
+        print("[WS] telemetry client connected")
+        try:
+            await websocket.send(json.dumps(self.build_telemetry_packet(), ensure_ascii=False))
+            async for msg in websocket:
+                data = json.loads(msg)
+                if data.get("type") == "telemetry_request":
+                    await websocket.send(json.dumps(self.build_telemetry_packet(), ensure_ascii=False))
+        except Exception as e:
+            print(f"[WS] telemetry handler error: {e}")
+        finally:
+            self.telemetry_clients.discard(websocket)
+            print("[WS] telemetry client disconnected")
+
     async def handler(self, websocket):
+        if self._websocket_path(websocket) == "/ws/telemetry":
+            await self.telemetry_handler(websocket)
+            return
+
         self.clients.add(websocket)
         print("[WS] client connected")
         try:
@@ -466,10 +522,16 @@ class EmiyaServer:
             await self.broadcast(self.build_state_packet())
             await asyncio.sleep(BROADCAST_INTERVAL)
 
+    async def telemetry_loop(self):
+        while True:
+            await self.broadcast_telemetry()
+            await asyncio.sleep(TELEMETRY_INTERVAL)
+
     async def loop(self):
         await asyncio.gather(
             self.monitor_loop(),
             self.broadcast_loop(),
+            self.telemetry_loop(),
         )
 
     async def main(self):
@@ -478,6 +540,8 @@ class EmiyaServer:
         print("[Mood] engine started")
         if not self.memory_writes_enabled:
             print("[Memory] writes disabled by EMIYA_MEMORY_WRITES=0")
+        if self.pipeline_dump_enabled:
+            print("[Telemetry] pipeline JSONL dump enabled")
 
         print(f"[EMIYA] server -> ws://{HOST}:{PORT}")
         async with websockets.serve(self.handler, HOST, PORT):

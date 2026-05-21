@@ -1,3 +1,4 @@
+import json
 import sys
 import tempfile
 import unittest
@@ -13,7 +14,7 @@ from memory.retriever import is_prompt_safe_memory
 from memory.store import MemoryStore
 from memory.writer import MemoryWriter
 from personality.modifiers import traits_to_prompt_fragment
-from personality.traits import PersonalityTraits, apply_preset, load_traits, save_traits
+from personality.traits import PersonalityTraits, apply_preset, load_presets, load_traits, save_traits
 from telemetry.pipeline_log import PipelineLogger
 
 
@@ -55,6 +56,28 @@ class Sprint2ScaffoldTests(unittest.TestCase):
 
             self.assertIsNone(memory_id)
             self.assertEqual(store.get_recent(10), [])
+
+    def test_memory_writer_stores_conversation_as_role_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = MemoryStore(str(Path(tmp) / "memory.db"))
+            writer = MemoryWriter(store)
+
+            assistant_id = writer.write_conversation(
+                "who are you?",
+                "emiya.",
+                mood_snapshot={"energy": 0.5, "focus": 0.5, "openness": 0.5},
+                turn_id="turn-1",
+            )
+
+            recent = store.get_recent(10)
+
+            self.assertEqual(len(recent), 2)
+            self.assertEqual(assistant_id, recent[1].id)
+            self.assertEqual(recent[0].role, "user")
+            self.assertEqual(recent[0].content, "who are you?")
+            self.assertEqual(recent[1].role, "assistant")
+            self.assertEqual(recent[1].content, "emiya.")
+            self.assertTrue(all(memory.turn_id == "turn-1" for memory in recent))
 
     def test_memory_prompt_blocks_are_xml_shaped(self):
         block = build_memory_prompt_blocks(
@@ -123,12 +146,14 @@ class Sprint2ScaffoldTests(unittest.TestCase):
         user_side_entity = {
             "timestamp": "now",
             "type": "conversation",
+            "role": "user",
             "content": "user: are you a digital entity?\nemiya: no.",
             "importance": 0.5,
         }
         assistant_side_entity = {
             "timestamp": "now",
             "type": "conversation",
+            "role": "assistant",
             "content": "user: are you emiya?\nemiya: i am a digital entity.",
             "importance": 0.5,
         }
@@ -147,14 +172,24 @@ class Sprint2ScaffoldTests(unittest.TestCase):
     def test_traits_round_trip_and_prompt_fragment(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "personality.json"
+            presets_path = Path(tmp) / "personality_presets.json"
+            presets_path.write_text(
+                json.dumps({"quiet": {"warmth": 10, "sarcasm": 5}}, ensure_ascii=False),
+                encoding="utf-8",
+            )
             saved = save_traits({"curiosity": 120, "warmth": -1}, path=path)
             loaded = load_traits(path=path)
             professional = apply_preset("professional", path=path)
+            quiet_presets = load_presets(path=presets_path)
+            quiet = apply_preset("quiet", path=path, presets_path=presets_path)
 
             self.assertEqual(saved.curiosity, 100)
             self.assertEqual(saved.warmth, 0)
             self.assertEqual(loaded.curiosity, 100)
             self.assertEqual(professional.formality, 70)
+            self.assertIn("quiet", quiet_presets)
+            self.assertEqual(quiet.warmth, 10)
+            self.assertEqual(quiet.curiosity, 70)
 
         fragment = traits_to_prompt_fragment(PersonalityTraits.from_mapping({"sarcasm": 90}))
         self.assertTrue(fragment.startswith("<traits>"))

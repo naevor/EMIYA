@@ -6,6 +6,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = ROOT / "config" / "personality.json"
+PRESETS_PATH = ROOT / "config" / "personality_presets.json"
 TRAIT_KEYS = ("curiosity", "bluntness", "warmth", "sarcasm", "formality")
 
 DEFAULT_TRAITS = {
@@ -16,7 +17,7 @@ DEFAULT_TRAITS = {
     "formality": 20,
 }
 
-PERSONALITY_PRESETS = {
+BUILTIN_PERSONALITY_PRESETS = {
     "default": DEFAULT_TRAITS,
     "unhinged": {
         "curiosity": 90,
@@ -40,6 +41,7 @@ PERSONALITY_PRESETS = {
         "formality": 10,
     },
 }
+PERSONALITY_PRESETS = BUILTIN_PERSONALITY_PRESETS
 
 
 def _clamp(value: Any) -> int:
@@ -91,7 +93,32 @@ def save_traits(traits: PersonalityTraits | dict[str, Any], path: Path = CONFIG_
     return traits
 
 
-def apply_preset(name: str, path: Path = CONFIG_PATH) -> PersonalityTraits:
-    if name not in PERSONALITY_PRESETS:
+def load_presets(path: Path = PRESETS_PATH) -> dict[str, dict[str, int]]:
+    if not path.exists():
+        return {
+            name: PersonalityTraits.from_mapping(values).to_dict()
+            for name, values in BUILTIN_PERSONALITY_PRESETS.items()
+        }
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    presets = {
+        name: PersonalityTraits.from_mapping(values).to_dict()
+        for name, values in BUILTIN_PERSONALITY_PRESETS.items()
+    }
+    for name, values in (data or {}).items():
+        if isinstance(name, str) and isinstance(values, dict):
+            presets[name] = PersonalityTraits.from_mapping(values).to_dict()
+    return presets
+
+
+def apply_preset(
+    name: str,
+    path: Path = CONFIG_PATH,
+    presets_path: Path = PRESETS_PATH,
+) -> PersonalityTraits:
+    presets = load_presets(presets_path)
+    if name not in presets:
         raise ValueError(f"unknown personality preset: {name}")
-    return save_traits(PersonalityTraits.from_mapping(PERSONALITY_PRESETS[name]), path=path)
+    return save_traits(PersonalityTraits.from_mapping(presets[name]), path=path)

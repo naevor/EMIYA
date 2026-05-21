@@ -15,16 +15,28 @@ class MemoryWriter:
         mood_snapshot: dict[str, Any] | None = None,
         importance: float = 0.5,
         tags: list[str] | None = None,
+        turn_id: str | None = None,
     ) -> int | None:
         if not self.enabled:
             return None
-        content = f"user: {user_text.strip()}\nemiya: {assistant_text.strip()}"
+        common_tags = ["chat", *(tags or [])]
+        self.store.add(
+            "conversation",
+            user_text.strip(),
+            mood_snapshot=mood_snapshot,
+            importance=min(importance, 0.45),
+            tags=[*common_tags, "user"],
+            role="user",
+            turn_id=turn_id,
+        )
         return self.store.add(
             "conversation",
-            content,
+            assistant_text.strip(),
             mood_snapshot=mood_snapshot,
             importance=importance,
-            tags=["chat", *(tags or [])],
+            tags=[*common_tags, "assistant"],
+            role="assistant",
+            turn_id=turn_id,
         )
 
     def write_observation(
@@ -42,6 +54,7 @@ class MemoryWriter:
             mood_snapshot=mood_snapshot,
             importance=importance,
             tags=["monitor", *(tags or [])],
+            role="system",
         )
 
     def write_trigger_event(
@@ -60,4 +73,5 @@ class MemoryWriter:
             mood_snapshot=mood_snapshot,
             importance=importance,
             tags=["l0", trigger],
+            role="assistant",
         )
