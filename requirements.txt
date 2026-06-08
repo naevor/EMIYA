@@ -1,0 +1,4 @@
+requests>=2.31,<3
+websockets>=13,<16
+psutil>=5.9,<8
+pywin32>=306; platform_system == "Windows"
