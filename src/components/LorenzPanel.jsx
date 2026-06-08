@@ -15,64 +15,113 @@ const MINT_DIM = 'rgba(61, 219, 177, 0.2)';
 
 export default function LorenzPanel({ trail, current, asciiMode, onToggleAscii }) {
   const canvasRef = useRef(null);
+  const lastPointRef = useRef(null);
+  const transitionRef = useRef({ from: null, to: null, startedAt: 0 });
 
-  /* Canvas drawing: simple 3D-to-2D orthogonal projection. */
+  useEffect(() => {
+    const next = trail?.[trail.length - 1];
+    if (!next) return;
+
+    const prev = lastPointRef.current ?? next;
+    const changed =
+      !lastPointRef.current ||
+      prev.x !== next.x ||
+      prev.y !== next.y ||
+      prev.z !== next.z;
+
+    if (changed) {
+      transitionRef.current = {
+        from: prev,
+        to: next,
+        startedAt: performance.now(),
+      };
+      lastPointRef.current = next;
+    }
+  }, [trail]);
+
+  /* Canvas drawing: simple 3D-to-2D projection with smoothed current point. */
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || asciiMode) return;
+    if (!canvas || asciiMode) return undefined;
 
     const ctx = canvas.getContext('2d');
-    const W = canvas.width  = canvas.offsetWidth  * window.devicePixelRatio;
-    const H = canvas.height = canvas.offsetHeight * window.devicePixelRatio;
-    ctx.scale(1, 1);
+    let frame;
 
-    ctx.clearRect(0, 0, W, H);
+    const draw = (now) => {
+      const dpr = window.devicePixelRatio || 1;
+      const W = Math.max(1, Math.floor(canvas.offsetWidth * dpr));
+      const H = Math.max(1, Math.floor(canvas.offsetHeight * dpr));
 
-    if (!trail || trail.length === 0) return;
+      if (canvas.width !== W || canvas.height !== H) {
+        canvas.width = W;
+        canvas.height = H;
+      }
 
-    /* Normalize raw_x, raw_y, raw_z. */
-    const xs = trail.map(p => p.x ?? 0);
-    const ys = trail.map(p => p.y ?? 0);
-    const zs = trail.map(p => p.z ?? 0);
+      ctx.clearRect(0, 0, W, H);
 
-    const xMin = Math.min(...xs), xMax = Math.max(...xs);
-    const yMin = Math.min(...ys), yMax = Math.max(...ys);
-    const zMin = Math.min(...zs), zMax = Math.max(...zs);
+      if (!trail || trail.length === 0) {
+        frame = requestAnimationFrame(draw);
+        return;
+      }
 
-    const xRange = xMax - xMin || 1;
-    const yRange = yMax - yMin || 1;
-    const zRange = zMax - zMin || 1;
+      const xs = trail.map(p => p.x ?? 0);
+      const ys = trail.map(p => p.y ?? 0);
+      const zs = trail.map(p => p.z ?? 0);
 
-    const padding = 24;
+      const xMin = Math.min(...xs), xMax = Math.max(...xs);
+      const yMin = Math.min(...ys), yMax = Math.max(...ys);
+      const zMin = Math.min(...zs), zMax = Math.max(...zs);
 
-    /* Fade trail. */
-    for (let i = 0; i < trail.length; i++) {
-      const p = trail[i];
-      const t = i / trail.length;             // 0 = oldest, 1 = newest
+      const xRange = xMax - xMin || 1;
+      const yRange = yMax - yMin || 1;
+      const zRange = zMax - zMin || 1;
+      const padding = 24 * dpr;
 
-      const px = padding + ((p.x - xMin) / xRange) * (W - padding * 2);
-      const py = padding + ((p.y - yMin) / yRange) * (H - padding * 2);
-      const zNorm = (p.z - zMin) / zRange;
+      const project = (p) => ({
+        x: padding + (((p.x ?? 0) - xMin) / xRange) * (W - padding * 2),
+        y: padding + (((p.y ?? 0) - yMin) / yRange) * (H - padding * 2),
+      });
 
-      const alpha = 0.05 + 0.5 * t * (0.3 + 0.7 * zNorm);
-      ctx.fillStyle = `rgba(61, 219, 177, ${alpha})`;
-      ctx.fillRect(px, py, 1.5, 1.5);
-    }
+      const lerpPoint = (from, to, t) => ({
+        x: (from.x ?? 0) + ((to.x ?? 0) - (from.x ?? 0)) * t,
+        y: (from.y ?? 0) + ((to.y ?? 0) - (from.y ?? 0)) * t,
+        z: (from.z ?? 0) + ((to.z ?? 0) - (from.z ?? 0)) * t,
+      });
 
-    /* Current point. */
-    const last = trail[trail.length - 1];
-    if (last) {
-      const px = padding + ((last.x - xMin) / xRange) * (W - padding * 2);
-      const py = padding + ((last.y - yMin) / yRange) * (H - padding * 2);
+      for (let i = 0; i < trail.length; i++) {
+        const p = trail[i];
+        const t = i / trail.length;
+        const point = project(p);
+        const zNorm = ((p.z ?? 0) - zMin) / zRange;
+
+        const alpha = 0.05 + 0.5 * t * (0.3 + 0.7 * zNorm);
+        ctx.fillStyle = `rgba(61, 219, 177, ${alpha})`;
+        ctx.fillRect(point.x, point.y, 1.5 * dpr, 1.5 * dpr);
+      }
+
+      const last = trail[trail.length - 1];
+      const transition = transitionRef.current;
+      const progress = Math.min(1, Math.max(0, (now - transition.startedAt) / 900));
+      const eased = progress * (2 - progress);
+      const currentPoint = transition.from && transition.to
+        ? lerpPoint(transition.from, transition.to, eased)
+        : last;
+      const point = project(currentPoint);
+      const pulse = 1 + Math.sin(now / 180) * 0.25;
 
       ctx.fillStyle = MINT;
       ctx.shadowColor = MINT;
-      ctx.shadowBlur  = 12;
+      ctx.shadowBlur = 12 * dpr;
       ctx.beginPath();
-      ctx.arc(px, py, 3, 0, Math.PI * 2);
+      ctx.arc(point.x, point.y, (3.2 + pulse) * dpr, 0, Math.PI * 2);
       ctx.fill();
       ctx.shadowBlur = 0;
-    }
+
+      frame = requestAnimationFrame(draw);
+    };
+
+    frame = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(frame);
   }, [trail, asciiMode]);
 
   /* ASCII fallback: simple 60x24 projection. */
