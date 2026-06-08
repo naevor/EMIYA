@@ -17,10 +17,10 @@
 
 **[ status: EARLY DEVELOPMENT · R&D PHASE ]**
 
-`v0.1-sprint1.5` · Sprint 2 active
+`v0.1-sprint1.5` · Sprint 2 scaffold active
 
 ![python](https://img.shields.io/badge/python-3.11+-ffb000?style=flat-square&labelColor=000000)
-![react](https://img.shields.io/badge/react-18-ffb000?style=flat-square&labelColor=000000)
+![react](https://img.shields.io/badge/react-19-ffb000?style=flat-square&labelColor=000000)
 ![tauri](https://img.shields.io/badge/tauri-2.0-ffb000?style=flat-square&labelColor=000000)
 ![ollama](https://img.shields.io/badge/ollama-local-ffb000?style=flat-square&labelColor=000000)
 ![license](https://img.shields.io/badge/license-MIT-ffb000?style=flat-square&labelColor=000000)
@@ -56,16 +56,16 @@ She will not close your tabs for you. She might ask why you have forty of them o
   │   always alive · routes requests   ~500MB RAM         │
   ├────────────────────┬───────────────────────────────────┤
   │   L0               │   L1                              │
-  │   Qwen3 4B         │   L3-8B-Stheno v3.2 Q5_K_M        │
+  │   Qwen3 4B         │   Gemma4 e4b (experimental)       │
   │   always loaded    │   on-demand                       │
   │   observation      │   deep dialogue                   │
   │   small talk       │   persona voice                   │
   │   long sessions    │   code direction                  │
   ├────────────────────┴───────────────────────────────────┤
-  │   L2   Claude API (external)                           │
+  │   L2   Claude API (planned)                            │
   │   heavy reasoning · sleeps most of the time            │
   ├────────────────────────────────────────────────────────┤
-  │   CLAWBRIDGE → OpenClaw @ localhost:18789              │
+  │   CLAWBRIDGE → OpenClaw @ localhost:18789 (planned)    │
   │   delegated execution · "hands" for routine tasks      │
   └────────────────────────────────────────────────────────┘
 
@@ -114,7 +114,7 @@ Default parameters `σ=10, ρ=28, β=8/3` produce the canonical butterfly — de
 
 ## `04_roadmap`
 
-The full 12-week build plan lives in [`SPRINT_ROADMAP.md`](./SPRINT_ROADMAP.md). Summary:
+The working roadmap currently lives in project notes and the Notion dev log. Summary:
 
 | Sprint | Goal | Status |
 |:------:|:-----|:------:|
@@ -131,42 +131,41 @@ Live progress, dev-log, and design documents:
 
 ## `05_features`
 
-What she can already do, and what she will be able to do by v0.1:
+Current implementation status:
 
 ```
   [ ACTIVITY MONITOR ]
-    ├─ keyboard / mouse activity tracking
-    ├─ active window detection
-    ├─ session duration awareness
-    ├─ daily rhythm modeling
-    └─ trigger engine for autonomous intervention
+    [x] active window detection
+    [x] session duration awareness
+    [x] activity-state hints
+    [~] trigger engine for autonomous intervention
+    [ ] keyboard / mouse activity tracking
 
   [ PERSONALITY ]
-    ├─ Lorenz-based mood drift (3 axes)
-    ├─ tunable base traits (5 knobs)
-    ├─ character-consistency validator
-    └─ mood-tagged persistent memory
+    [x] Lorenz-based mood drift (3 axes)
+    [x] tunable base traits (5 knobs)
+    [x] mood-tagged persistent memory scaffold
+    [ ] character-consistency validator
 
   [ INTERFACE ]
-    ├─ MHRD-inspired terminal UI
-    ├─ live attractor visualization (canvas + ASCII modes)
-    ├─ model console (VRAM, temp, tokens/sec)
-    ├─ decoding parameter panel
-    ├─ pipeline visualizer (every step, every ms)
-    ├─ verbose thinking mode
-    └─ memory inspector (browse / edit / pin)
+    [x] MHRD-inspired terminal UI
+    [x] live attractor visualization (canvas + ASCII modes)
+    [~] pipeline visualizer (steps, latency, prompt/debug details)
+    [~] model status panel
+    [ ] decoding parameter panel
+    [ ] memory inspector (browse / edit / pin)
 
   [ DELEGATION ]
-    ├─ OpenClaw integration via ClawBridge
-    ├─ task detection heuristics
-    ├─ confirmation flow for sensitive actions
-    └─ result narration in EMIYA's voice
+    [ ] OpenClaw integration via ClawBridge
+    [ ] task detection heuristics
+    [ ] confirmation flow for sensitive actions
+    [ ] result narration in EMIYA's voice
 
   [ CONTROL ]
-    ├─ user-defined Trigger DSL
-    ├─ hot-swap models at runtime
-    ├─ save / load personality presets
-    └─ full telemetry of every request
+    [x] save / load personality presets
+    [x] local pipeline telemetry
+    [ ] user-defined Trigger DSL
+    [ ] hot-swap models at runtime
 ```
 
 ---
@@ -183,7 +182,7 @@ Minimum (L0 only, L1 disabled):
   disk       20 GB (models + memory)
 ```
 
-Recommended (full L0 + L1 + validator):
+Recommended (full L0 + L1 during current R&D):
 ```
   OS         Windows 11 · Linux
   RAM        32 GB
@@ -191,7 +190,7 @@ Recommended (full L0 + L1 + validator):
   disk       40 GB
 ```
 
-L2 (Claude API) runs in the cloud — only an Anthropic API key is required, no local resources.
+L2 / Claude and OpenClaw are planned layers, not required for the current local build.
 
 ---
 
@@ -199,31 +198,28 @@ L2 (Claude API) runs in the cloud — only an Anthropic API key is required, no 
 
 > ⚠  Pre-release. Install paths, config keys, and runtime behavior **will change** between sprints. This section reflects the target flow for v0.1.
 
-```bash
+```powershell
 # 01. clone
 git clone https://github.com/naevor/EMIYA.git
 cd EMIYA
 
 # 02. install Ollama and pull required models
 ollama pull qwen3:4b
-ollama pull hf.co/bartowski/L3-8B-Stheno-v3.2-GGUF:Q5_K_M
+ollama pull gemma4:e4b
 
-# later sprint validator/model-console work may add more local models
-
-# 03. python backend
-cd core
+# 03. python backend dependencies
 pip install -r requirements.txt
 
 # 04. react frontend
-cd ..
 npm install
 
-# 05. configure
-cp config/example.json config/emiya.json
-# edit emiya.json — add your Anthropic API key for L2
+# 05. local private prompts
+copy core\prompts\l0.txt.example core\prompts\l0.txt
+copy core\prompts\l1.txt.example core\prompts\l1.txt
 
 # 06. boot
-npm run emiya
+npm run dev:backend
+npm run dev:ui
 ```
 
 For model testing without writing new conversation memory:
@@ -233,7 +229,7 @@ $env:EMIYA_MEMORY_WRITES="0"
 python core/server.py
 ```
 
-Full setup guide: [`docs/SETUP.md`](./docs/SETUP.md) *(coming in sprint 5)*
+The current backend is Windows-first because the Activity Monitor uses `pywin32`.
 
 ---
 
@@ -265,7 +261,7 @@ Built on the shoulders of:
 - **[MHRD](https://store.steampowered.com/app/576030/MHRD/)** — for proving that letting users see the circuits is more engaging than hiding them
 - **[Ollama](https://ollama.com)** — for making local LLMs trivial
 - **[Qwen team](https://qwenlm.github.io/)** — for Qwen3, currently used by L0
-- **L3-8B-Stheno v3.2 GGUF** — current L1 voice model
+- **Gemma4 e4b** — current experimental L1 voice model
 - **[OpenClaw](https://openclaw.ai)** — for the "hands" infrastructure
 - **[Anthropic](https://anthropic.com)** — for Claude (L2) and for conversations that helped shape this project
 - **Lorenz** — for the attractor
