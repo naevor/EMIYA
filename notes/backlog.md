@@ -5,10 +5,13 @@
 - Refactored Activity Monitor state labels into prose context hints before L1 sees them.
   Raw labels like `scattered`, `grinding`, `idle_loop`, and `normal` should not be present in `<runtime_context>`. Use a mapper similar to `mood_to_prompt_fragment`, for example `scattered -> he keeps switching windows. no settled focus.`
 
-## Sprint 2 candidates
+- Added per-message memory records for new conversations.
+  New writes store `role=user` and `role=assistant` records under the same `turn_id`, so assistant-side prompt-safety filtering is cleaner. Existing local memories may still be legacy until migrated/cleaned.
 
-- Consider migrating memory from turn-pair records to per-message records.
-  Current conversation memories store `user:` and `emiya:` in one content field, so prompt-safety filtering has to split assistant-side text manually. Per-message records with `role` would make retrieval filtering cleaner and safer.
+- Added a memory inspection utility.
+  Use `python scripts/memory/inspect_memory.py --limit 10` for a read-only report, `--migrate` to apply the current memory schema, and `--downgrade-unsafe` only when deliberately lowering unsafe legacy records.
+
+## Sprint 2 candidates
 
 - Keep post-tag L1 polish out of Sprint 1.5.
   New voice regressions found after `v0.1-sprint1.5` should be recorded here unless they are severe enough to block Sprint 2.
