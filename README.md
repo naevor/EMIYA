@@ -17,7 +17,7 @@
 
 **[ status: EARLY DEVELOPMENT · R&D PHASE ]**
 
-`v0.1-sprint1.5` · Sprint 2 scaffold active
+`v0.1-sprint1.5` · active local R&D build
 
 ![python](https://img.shields.io/badge/python-3.11+-ffb000?style=flat-square&labelColor=000000)
 ![react](https://img.shields.io/badge/react-19-ffb000?style=flat-square&labelColor=000000)
@@ -52,37 +52,29 @@ She will not close your tabs for you. She might ask why you have forty of them o
 
 ```
   ┌────────────────────────────────────────────────────────┐
-  │   ORCHESTRATOR  (L-meta)           rules + Qwen3 0.6B │
-  │   always alive · routes requests   ~500MB RAM         │
+  │   PYTHON SERVER                                      │
+  │   websocket gateway · monitor · memory · telemetry    │
   ├────────────────────┬───────────────────────────────────┤
   │   L0               │   L1                              │
   │   Qwen3 4B         │   Gemma4 e4b (experimental)       │
-  │   always loaded    │   on-demand                       │
-  │   observation      │   deep dialogue                   │
-  │   small talk       │   persona voice                   │
-  │   long sessions    │   code direction                  │
-  ├────────────────────┴───────────────────────────────────┤
-  │   L2   Claude API (planned)                            │
-  │   heavy reasoning · sleeps most of the time            │
-  ├────────────────────────────────────────────────────────┤
-  │   CLAWBRIDGE → OpenClaw @ localhost:18789 (planned)    │
-  │   delegated execution · "hands" for routine tasks      │
-  └────────────────────────────────────────────────────────┘
+  │   observation      │   main voice                      │
+  │   short triggers   │   deeper dialogue                 │
+  └────────────────────┴───────────────────────────────────┘
 
   ┌─── SUPPORTING SYSTEMS ─────────────────────────────────┐
   │                                                        │
   │   • Activity Monitor      watches your patterns        │
   │   • Lorenz Mood Engine    3-axis chaotic drift         │
-  │   • Persona Validator     planned character guard      │
   │   • Memory Store          SQLite, mood-tagged          │
-  │   • Trigger Engine        user-defined DSL rules       │
-  │   • Pipeline Telemetry    every step visible           │
+  │   • Trigger Engine        local state interventions    │
+  │   • Pipeline Telemetry    request-level debug stream   │
   │                                                        │
   └────────────────────────────────────────────────────────┘
 ```
 
-**EMIYA is the soul. OpenClaw is the hands.**
-She decides when to act, in what tone, with what urgency. The execution is delegated. The personality is not.
+The interface is part of the system. The user is meant to see the machinery:
+mood, activity, memory, model status, and request telemetry are all visible
+instead of being hidden behind a clean assistant shell.
 
 ---
 
@@ -108,24 +100,28 @@ On top of these stable traits drifts a **mood vector** — three axes (Energy, F
   dz/dt = xy - βz
 ```
 
-Default parameters `σ=10, ρ=28, β=8/3` produce the canonical butterfly — deterministic chaos. You can tune these through the Mood Tuner: calm, standard, edge-of-chaos, storm. External events (your activity, time of day) gently nudge the system. The result: she is not the same on Tuesday morning as she is on Friday night. And that difference is **felt**, not randomized.
+Default parameters `σ=10, ρ=28, β=8/3` produce the canonical butterfly — deterministic chaos. External events (your activity, time of day) gently nudge the system. The result: she is not the same on Tuesday morning as she is on Friday night. And that difference is **felt**, not randomized.
 
 ---
 
-## `04_roadmap`
+## `04_status`
 
-The working roadmap currently lives in project notes and the Notion dev log. Summary:
+Public status is intentionally compact. Internal planning stays out of the
+repository; this README describes the current local build, not the whole path.
 
-| Sprint | Goal | Status |
-|:------:|:-----|:------:|
-| **01** | Lorenz Mood Engine · live visualization · mood → prompt pipeline | `[ tagged: v0.1-sprint1.5 ]` |
-| **02** | Persistent memory · personality knobs · response pipeline visualizer | `[ active ]` |
-| **03** | Persona validator · model console · decoding panel | `[ queued ]` |
-| **04** | ClawBridge · OpenClaw integration · task delegation · result narration | `[ queued ]` |
-| **05** | Trigger DSL · memory inspector · UI polish · v0.1 release | `[ queued ]` |
-| **06** | Custom skills · community feedback · retrospective | `[ optional ]` |
+Current focus:
 
-Live progress, dev-log, and design documents:
+```
+  [x] Lorenz mood engine + live visualization
+  [x] English runtime voice path for L0/L1
+  [x] SQLite memory scaffold
+  [x] personality knobs and presets
+  [x] pipeline telemetry scaffold
+  [~] memory retrieval quality
+  [~] pipeline UI polish
+```
+
+Live progress and dev-log:
 [**→ EMIYA notion workspace**](https://pond-calliandra-6e3.notion.site/EMIYA-dev-log-34c540076ff6803ab981cd626ee05ab7?pvs=74)
 ---
 
@@ -139,33 +135,21 @@ Current implementation status:
     [x] session duration awareness
     [x] activity-state hints
     [~] trigger engine for autonomous intervention
-    [ ] keyboard / mouse activity tracking
 
   [ PERSONALITY ]
     [x] Lorenz-based mood drift (3 axes)
     [x] tunable base traits (5 knobs)
     [x] mood-tagged persistent memory scaffold
-    [ ] character-consistency validator
 
   [ INTERFACE ]
     [x] MHRD-inspired terminal UI
     [x] live attractor visualization (canvas + ASCII modes)
     [~] pipeline visualizer (steps, latency, prompt/debug details)
     [~] model status panel
-    [ ] decoding parameter panel
-    [ ] memory inspector (browse / edit / pin)
-
-  [ DELEGATION ]
-    [ ] OpenClaw integration via ClawBridge
-    [ ] task detection heuristics
-    [ ] confirmation flow for sensitive actions
-    [ ] result narration in EMIYA's voice
 
   [ CONTROL ]
     [x] save / load personality presets
     [x] local pipeline telemetry
-    [ ] user-defined Trigger DSL
-    [ ] hot-swap models at runtime
 ```
 
 ---
@@ -190,13 +174,13 @@ Recommended (full L0 + L1 during current R&D):
   disk       40 GB
 ```
 
-L2 / Claude and OpenClaw are planned layers, not required for the current local build.
+The current build is local-only and does not require cloud APIs.
 
 ---
 
 ## `07_install`
 
-> ⚠  Pre-release. Install paths, config keys, and runtime behavior **will change** between sprints. This section reflects the target flow for v0.1.
+> ⚠  Pre-release. Install paths, config keys, and runtime behavior may change while the local build evolves.
 
 ```powershell
 # 01. clone
@@ -247,10 +231,10 @@ No language model is conscious. But the *feeling* that you're interacting with s
 You should be able to see her thinking. See her mood vector. See which model is loaded, how much VRAM, how many tokens per second. This is not developer debug mode — this is the product. MHRD showed that letting users see the machinery is not a bug, it's the entire point.
 
 **04. Local-first. Always.**
-She watches you. She remembers. This data does not leave the machine except when you explicitly invoke L2. No analytics. No telemetry phoning home. The gateway binds to localhost by default.
+She watches you. She remembers. The current build is local-only. No analytics. No telemetry phoning home. The gateway binds to localhost by default.
 
 **05. She is not for everyone.**
-If you want a productivity tool — use OpenClaw, Claude, or any of the hundred excellent alternatives. EMIYA is for people who find it interesting that a Lorenz attractor can make software feel alive. That's a small audience. That's fine.
+If you want a pure productivity tool — use a task runner or a general assistant. EMIYA is for people who find it interesting that a Lorenz attractor can make software feel alive. That's a small audience. That's fine.
 
 ---
 
@@ -262,8 +246,6 @@ Built on the shoulders of:
 - **[Ollama](https://ollama.com)** — for making local LLMs trivial
 - **[Qwen team](https://qwenlm.github.io/)** — for Qwen3, currently used by L0
 - **Gemma4 e4b** — current experimental L1 voice model
-- **[OpenClaw](https://openclaw.ai)** — for the "hands" infrastructure
-- **[Anthropic](https://anthropic.com)** — for Claude (L2) and for conversations that helped shape this project
 - **Lorenz** — for the attractor
 
 ---
