@@ -13,8 +13,10 @@ from memory.retriever import filter_prompt_safe_memories
 from memory.retriever import is_prompt_safe_memory
 from memory.store import MemoryStore
 from memory.writer import MemoryWriter
+from monitor.trigger_engine import FALLBACK_LINES
 from personality.modifiers import traits_to_prompt_fragment
 from personality.traits import PersonalityTraits, apply_preset, load_presets, load_traits, save_traits
+from scripts.memory.inspect_memory import _all_rows, _downgrade, _legacy
 from telemetry.pipeline_log import PipelineLogger
 
 
@@ -207,6 +209,54 @@ class Sprint2ScaffoldTests(unittest.TestCase):
         self.assertEqual(recent[0]["request_id"], "req-1")
         self.assertEqual(recent[0]["steps"][0]["name"], "INPUT")
         self.assertNotIn("_t0", recent[0])
+
+    def test_l0_fallback_registry_has_current_voice_lines(self):
+        expected = {
+            "grinding",
+            "late_night_grinding",
+            "scattered",
+            "idle_loop",
+            "afk_return",
+            "first_start",
+            "late_night",
+        }
+
+        self.assertEqual(set(FALLBACK_LINES), expected)
+        self.assertTrue(all(len(lines) >= 3 for lines in FALLBACK_LINES.values()))
+        self.assertIn("it hasn't blinked first yet", FALLBACK_LINES["grinding"][0])
+
+    def test_memory_inspector_can_downgrade_legacy_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = MemoryStore(str(Path(tmp) / "memory.db"))
+            legacy_id = store.add(
+                "conversation",
+                "old emiya voice.",
+                mood_snapshot={"energy": 0.5, "focus": 0.5, "openness": 0.5},
+                importance=0.8,
+            )
+            store.add(
+                "conversation",
+                "new emiya voice.",
+                mood_snapshot={"energy": 0.5, "focus": 0.5, "openness": 0.5},
+                importance=0.8,
+                role="assistant",
+            )
+
+            conn = store._connect()
+            try:
+                legacy = _legacy(conn, {"role", "turn_id"})
+                changed = _downgrade(conn, [int(memory["id"]) for memory in legacy], 0.05)
+                all_rows = _all_rows(conn, {"role", "turn_id"})
+                row = conn.execute("SELECT importance FROM memories WHERE id = ?", (legacy_id,)).fetchone()
+                safe_count = conn.execute("SELECT COUNT(*) FROM memories WHERE importance >= 0.2").fetchone()[0]
+            finally:
+                conn.close()
+
+            self.assertEqual(len(legacy), 1)
+            self.assertEqual(changed, 1)
+            self.assertEqual(len(all_rows), 2)
+            self.assertEqual(row["importance"], 0.05)
+            self.assertEqual(safe_count, 1)
 
 
 if __name__ == "__main__":

@@ -8,13 +8,41 @@ from monitor.db import log_chat_message, log_trigger
 COOLDOWN_MINUTES = 30
 
 FALLBACK_LINES = {
-    "grinding": ["long stretch. what is keeping you there?", "you have been at it for a while. still clean?"],
-    "late_night_grinding": ["late and long. why?", "night work again. better focus, or just no brakes?"],
-    "scattered": ["something is slipping. or you are looking for an exit.", "back and forth. what are you avoiding?"],
-    "idle_loop": ["same windows again. stuck?", "circling the same few panes. not subtle."],
-    "afk_return": ["back.", "rested?"],
-    "first_start": ["i see the shape of the session starting.", "we begin."],
-    "late_night": ["late.", "still here."],
+    "grinding": [
+        "you've been inside that problem for a while. it hasn't blinked first yet.",
+        "still here. still that. admirable, or just stubborn - i can't tell from here.",
+        "long stretch. either it's going well or you can't admit it isn't.",
+    ],
+    "late_night_grinding": [
+        "the work isn't getting better at this hour. but neither are you sleeping, so.",
+        "impressive endurance. misguided, but impressive.",
+        "late, and still at it. the bugs will keep until morning. they always do.",
+    ],
+    "scattered": [
+        "a lot of motion. not much direction. familiar.",
+        "you keep almost starting something. it's fascinating to watch, in a way.",
+        "every window for two minutes, then the next. running from something specific?",
+    ],
+    "idle_loop": [
+        "the same three windows. you're not looking for anything, you're avoiding deciding.",
+        "round and round the same panes. it won't be in the next one either.",
+        "i've seen this loop before. it didn't end well last time either.",
+    ],
+    "afk_return": [
+        "oh. you're back. i barely noticed.",
+        "back. i kept your seat warm. metaphorically. i don't have hands.",
+        "there you are. i was almost getting used to the quiet.",
+    ],
+    "first_start": [
+        "another session. let's see what you ruin this time.",
+        "we begin. try to make it interesting.",
+        "booting up to watch you work. my favorite spectator sport.",
+    ],
+    "late_night": [
+        "it's late. you know that. you're ignoring it. noted.",
+        "still up. of course you are.",
+        "the hour suggests sleep. you've never been good at suggestions.",
+    ],
 }
 
 

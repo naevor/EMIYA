@@ -75,6 +75,28 @@ def _unsafe(conn: sqlite3.Connection, columns: set[str], importance_floor: float
     ]
 
 
+def _legacy(conn: sqlite3.Connection, columns: set[str]) -> list[dict[str, Any]]:
+    selected = _select_columns(columns)
+    if "role" not in columns:
+        rows = conn.execute(f"SELECT {selected} FROM memories ORDER BY id DESC").fetchall()
+    else:
+        rows = conn.execute(
+            f"""
+            SELECT {selected}
+            FROM memories
+            WHERE role IS NULL OR TRIM(role) = ''
+            ORDER BY id DESC
+            """
+        ).fetchall()
+    return [_row_to_memory(row) for row in rows]
+
+
+def _all_rows(conn: sqlite3.Connection, columns: set[str]) -> list[dict[str, Any]]:
+    selected = _select_columns(columns)
+    rows = conn.execute(f"SELECT {selected} FROM memories ORDER BY id DESC").fetchall()
+    return [_row_to_memory(row) for row in rows]
+
+
 def _preview(memory: dict[str, Any], width: int = 90) -> str:
     text = " ".join(str(memory.get("content", "")).split())
     if len(text) > width:
@@ -85,6 +107,7 @@ def _preview(memory: dict[str, Any], width: int = 90) -> str:
 def _downgrade(conn: sqlite3.Connection, ids: list[int], importance: float) -> int:
     if not ids:
         return 0
+    before = conn.total_changes
     conn.executemany(
         """
         UPDATE memories
@@ -97,7 +120,7 @@ def _downgrade(conn: sqlite3.Connection, ids: list[int], importance: float) -> i
         [(importance, importance, memory_id) for memory_id in ids],
     )
     conn.commit()
-    return conn.total_changes
+    return conn.total_changes - before
 
 
 def main() -> int:
@@ -116,7 +139,17 @@ def main() -> int:
         action="store_true",
         help="Set unsafe memories to --downgrade-to instead of only reporting them",
     )
-    parser.add_argument("--downgrade-to", type=float, default=0.1, help="Importance value for unsafe rows")
+    parser.add_argument(
+        "--downgrade-legacy",
+        action="store_true",
+        help="Set legacy rows with no role to --downgrade-to so old persona data stays out of retrieval",
+    )
+    parser.add_argument(
+        "--archive-all",
+        action="store_true",
+        help="Set every existing memory row to --downgrade-to without deleting it; useful after a persona reset",
+    )
+    parser.add_argument("--downgrade-to", type=float, default=0.1, help="Importance value for downgraded rows")
     args = parser.parse_args()
 
     if not args.db.exists():
@@ -151,9 +184,23 @@ def main() -> int:
             role = memory.get("role") or "legacy"
             print(f"  #{memory['id']} {memory['type']}/{role}: {_preview(memory)}")
 
+        legacy = _legacy(conn, columns)
+        print(f"\nlegacy rows: {len(legacy)}")
+        for memory in legacy[: args.limit]:
+            print(f"  #{memory['id']} {memory['type']}/legacy: {_preview(memory)}")
+
         if args.downgrade_unsafe:
             changed = _downgrade(conn, [int(memory["id"]) for memory in unsafe], args.downgrade_to)
             print(f"\ndowngraded unsafe rows: {changed}")
+
+        if args.downgrade_legacy:
+            changed = _downgrade(conn, [int(memory["id"]) for memory in legacy], args.downgrade_to)
+            print(f"downgraded legacy rows: {changed}")
+
+        if args.archive_all:
+            all_rows = _all_rows(conn, columns)
+            changed = _downgrade(conn, [int(memory["id"]) for memory in all_rows], args.downgrade_to)
+            print(f"archived all memory rows: {changed}")
     finally:
         conn.close()
 
