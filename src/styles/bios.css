@@ -959,6 +959,11 @@ body {
   color: var(--error);
 }
 
+.pipeline-step--selected {
+  outline: 1px solid var(--mint);
+  outline-offset: 1px;
+}
+
 .pipeline-step__label {
   font-size: 8px;
   letter-spacing: 0.08em;
@@ -982,16 +987,86 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-.pipeline-details {
-  max-height: 150px;
-  overflow: auto;
-  margin: 10px 0 0 0;
-  padding: 8px;
-  border: 1px dashed var(--border);
+.pipeline-status {
+  color: var(--text-faint);
+  font-size: 9px;
+  letter-spacing: 0.15em;
+}
+
+.pipeline-drawer {
+  margin-top: 10px;
+  border: 1px solid var(--border);
   background: var(--bg-deep);
+}
+
+.pipeline-drawer__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--mint);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.pipeline-drawer__header button {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0.12em;
+  padding: 3px 6px;
+  cursor: pointer;
+}
+
+.pipeline-drawer__header button:hover {
+  color: var(--mint);
+  border-color: var(--border-active);
+}
+
+.pipeline-drawer__summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 7px 8px;
+  border-bottom: 1px dashed var(--border);
+  color: var(--text-faint);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pipeline-detail-section {
+  border-bottom: 1px solid rgba(255, 176, 0, 0.12);
+}
+
+.pipeline-detail-section:last-child {
+  border-bottom: none;
+}
+
+.pipeline-detail-section summary {
+  padding: 7px 8px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+}
+
+.pipeline-detail-section[open] summary {
+  color: var(--mint);
+}
+
+.pipeline-detail-section pre {
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  padding: 0 8px 8px;
   color: var(--text-faint);
   font-family: var(--mono);
   font-size: 10px;
   line-height: 1.4;
   white-space: pre-wrap;
+  word-break: break-word;
 }
