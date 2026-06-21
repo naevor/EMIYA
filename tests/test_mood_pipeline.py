@@ -128,6 +128,15 @@ class MoodPipelineTests(unittest.TestCase):
                     "importance": 0.5,
                 }
             ],
+            "voice_anchors": [
+                {
+                    "timestamp": "now",
+                    "type": "voice_anchor",
+                    "role": "assistant",
+                    "content": "approved voice must not steer a factual answer.",
+                    "importance": 0.9,
+                }
+            ],
         }
         messages = [
             {"role": "user", "content": "sqlite or postgres for emiya's memory layer?"},
@@ -149,7 +158,40 @@ class MoodPipelineTests(unittest.TestCase):
         self.assertIn("<task_mode>", system)
         self.assertIn("factual question", system)
         self.assertNotIn("memory layer needs relational stability", system)
+        self.assertNotIn("approved voice must not steer", system)
         self.assertEqual(prompt_messages, [{"role": "user", "content": "what do you know about project Artemis?"}])
+
+    def test_l1_nonfactual_turn_injects_approved_voice_anchors(self):
+        context = {
+            "active_min": 10,
+            "apps": [{"app": "code.exe"}],
+            "activity_hints": states_to_activity_hints(["normal"]),
+            "mood": {"energy": 0.5, "focus": 0.5, "openness": 0.5},
+            "recent_memory": [],
+            "relevant_memory": [],
+            "voice_anchors": [
+                {
+                    "timestamp": "now",
+                    "type": "voice_anchor",
+                    "role": "assistant",
+                    "content": "enough to test. not enough to trust.",
+                    "importance": 0.9,
+                }
+            ],
+        }
+        payloads = []
+
+        def fake_post(url, json, timeout):
+            payloads.append(json)
+            return FakeResponse()
+
+        with patch.object(l1.requests, "post", side_effect=fake_post):
+            l1.chat([{"role": "user", "content": "are you here?"}], context)
+
+        system = payloads[0]["messages"][0]["content"]
+        self.assertIn("<voice_anchors>", system)
+        self.assertIn("enough to test. not enough to trust.", system)
+        self.assertIn("not their factual content", system)
 
     def test_l1_proper_name_factual_followups_do_not_pull_memory_context(self):
         context = {

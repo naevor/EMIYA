@@ -8,13 +8,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "core"))
 
-from memory.retriever import build_memory_prompt_blocks
+from memory.retriever import MemoryRetriever, build_memory_prompt_blocks
 from memory.retriever import filter_prompt_safe_memories
 from memory.retriever import is_prompt_safe_memory
 from memory.store import MemoryStore
 from memory.writer import MemoryWriter
 from monitor.trigger_engine import FALLBACK_LINES
-from personality.modifiers import traits_to_prompt_fragment
+from personality.modifiers import MAX_TRAIT_INFLUENCE, _bounded_influence, traits_to_prompt_fragment
 from personality.traits import PersonalityTraits, apply_preset, load_presets, load_traits, save_traits
 from scripts.memory.inspect_memory import _all_rows, _downgrade, _legacy
 from telemetry.pipeline_log import PipelineLogger
@@ -195,8 +195,12 @@ class Sprint2ScaffoldTests(unittest.TestCase):
 
         fragment = traits_to_prompt_fragment(PersonalityTraits.from_mapping({"sarcasm": 90}))
         self.assertTrue(fragment.startswith("<traits>"))
-        self.assertIn("sarcasm: high", fragment)
+        self.assertIn("sarcasm: strongly elevated", fragment)
+        self.assertIn("never exaggerate them into a caricature", fragment)
         self.assertTrue(fragment.endswith("</traits>"))
+
+        self.assertEqual(_bounded_influence("sarcasm", 100), MAX_TRAIT_INFLUENCE)
+        self.assertEqual(_bounded_influence("sarcasm", 0), -MAX_TRAIT_INFLUENCE)
 
     def test_pipeline_logger_keeps_compact_recent_runs(self):
         logger = PipelineLogger(maxlen=2)
@@ -257,6 +261,59 @@ class Sprint2ScaffoldTests(unittest.TestCase):
             self.assertEqual(len(all_rows), 2)
             self.assertEqual(row["importance"], 0.05)
             self.assertEqual(safe_count, 1)
+
+    def test_keyword_retrieval_returns_the_matching_turn_not_recent_noise(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = MemoryStore(str(Path(tmp) / "memory.db"))
+            writer = MemoryWriter(store)
+            writer.write_conversation(
+                "we chose rust for window monitoring.",
+                "rust. the polling loop is where python starts to hurt.",
+                importance=0.7,
+                turn_id="relevant-turn",
+            )
+            for index in range(12):
+                writer.write_conversation(
+                    f"unrelated note {index}",
+                    "still unrelated.",
+                    turn_id=f"noise-{index}",
+                )
+
+            results = MemoryRetriever(store).search(
+                "what did we decide about rust monitoring?",
+                limit=2,
+            )
+
+            self.assertEqual(len(results), 2)
+            self.assertTrue(all(memory["turn_id"] == "relevant-turn" for memory in results))
+            self.assertEqual([memory["role"] for memory in results], ["user", "assistant"])
+
+    def test_voice_anchor_is_deduplicated_and_gets_its_own_prompt_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = MemoryStore(str(Path(tmp) / "memory.db"))
+            writer = MemoryWriter(store)
+            assistant_id = writer.write_conversation(
+                "is this enough?",
+                "enough to test. not enough to trust.",
+                turn_id="anchor-turn",
+            )
+
+            first_anchor = writer.write_voice_anchor(
+                "enough to test. not enough to trust.",
+                source_memory_id=assistant_id,
+            )
+            second_anchor = writer.write_voice_anchor(
+                "enough to test. not enough to trust.",
+                source_memory_id=assistant_id,
+            )
+            anchors = MemoryRetriever(store).get_anchors()
+            block = build_memory_prompt_blocks([], [], voice_anchors=anchors)
+
+            self.assertEqual(first_anchor, second_anchor)
+            self.assertEqual(len(anchors), 1)
+            self.assertIn("<voice_anchors>", block)
+            self.assertIn("enough to test. not enough to trust.", block)
+            self.assertIn("not their factual content", block)
 
 
 if __name__ == "__main__":
