@@ -11,6 +11,7 @@ DEFAULT_DB = CORE / "emiya.db"
 sys.path.insert(0, str(CORE))
 
 from memory.retriever import DEFAULT_IMPORTANCE_FLOOR, is_prompt_safe_memory  # noqa: E402
+from memory.anchors import assess_anchor_candidate, rank_anchor_candidates  # noqa: E402
 from memory.store import MemoryStore  # noqa: E402
 from memory.writer import MemoryWriter  # noqa: E402
 
@@ -136,18 +137,46 @@ def _promote_anchors(path: Path, memory_ids: list[int]) -> int:
         if memory.type != "conversation" or memory.role != "assistant":
             print(f"anchor skipped: memory #{memory_id} is not an assistant conversation")
             continue
-        if not is_prompt_safe_memory(memory, importance_floor=0.0):
-            print(f"anchor skipped: memory #{memory_id} is not prompt-safe")
+
+        assessment = assess_anchor_candidate(store, memory)
+        if not assessment.eligible:
+            print(f"anchor skipped: memory #{memory_id}")
+            for blocker in assessment.blockers:
+                print(f"  block: {blocker}")
+            for warning in assessment.warnings:
+                print(f"  warn: {warning}")
             continue
 
         anchor_id = writer.write_voice_anchor(
             memory.content,
             mood_snapshot=memory.mood_snapshot,
+            importance=assessment.recommended_importance,
+            tags=[f"motif:{motif}" for motif in assessment.motifs],
             source_memory_id=memory.id,
         )
-        print(f"anchor ready: memory #{memory_id} -> voice_anchor #{anchor_id}")
+        print(
+            f"anchor ready: memory #{memory_id} -> voice_anchor #{anchor_id} "
+            f"score={assessment.score:.2f} importance={assessment.recommended_importance:.2f}"
+        )
+        for warning in assessment.warnings:
+            print(f"  warn: {warning}")
         promoted += 1
     return promoted
+
+
+def _print_anchor_candidates(path: Path, limit: int) -> None:
+    store = MemoryStore(str(path))
+    candidates = rank_anchor_candidates(store, limit=limit)
+    print(f"\nanchor candidates: {len(candidates)}")
+    for memory, assessment in candidates:
+        motifs = ", ".join(assessment.motifs) if assessment.motifs else "none"
+        print(
+            f"  #{memory.id} score={assessment.score:.2f} "
+            f"recommended={assessment.recommended_importance:.2f} motifs={motifs}: "
+            f"{_preview(memory.to_dict(), width=120)}"
+        )
+        for warning in assessment.warnings:
+            print(f"    warn: {warning}")
 
 
 def main() -> int:
@@ -183,6 +212,13 @@ def main() -> int:
         default=[],
         metavar="MEMORY_ID",
         help="Copy a prompt-safe assistant conversation into the voice-anchor pool; repeatable",
+    )
+    parser.add_argument(
+        "--anchor-candidates",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Rank N context-light, diverse assistant replies for manual anchor review",
     )
     parser.add_argument("--downgrade-to", type=float, default=0.1, help="Importance value for downgraded rows")
     args = parser.parse_args()
@@ -242,6 +278,8 @@ def main() -> int:
     if args.promote_anchor:
         promoted = _promote_anchors(args.db, args.promote_anchor)
         print(f"promoted voice anchors: {promoted}")
+    if args.anchor_candidates > 0:
+        _print_anchor_candidates(args.db, args.anchor_candidates)
 
     return 0
 
