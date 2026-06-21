@@ -11,12 +11,13 @@ sys.path.insert(0, str(ROOT / "core"))
 from memory.retriever import MemoryRetriever, build_memory_prompt_blocks
 from memory.retriever import filter_prompt_safe_memories
 from memory.retriever import is_prompt_safe_memory
+from memory.anchors import assess_anchor_candidate, rank_anchor_candidates
 from memory.store import MemoryStore
 from memory.writer import MemoryWriter
 from monitor.trigger_engine import FALLBACK_LINES
 from personality.modifiers import MAX_TRAIT_INFLUENCE, _bounded_influence, traits_to_prompt_fragment
 from personality.traits import PersonalityTraits, apply_preset, load_presets, load_traits, save_traits
-from scripts.memory.inspect_memory import _all_rows, _downgrade, _legacy
+from scripts.memory.inspect_memory import _all_rows, _downgrade, _legacy, _promote_anchors
 from telemetry.pipeline_log import PipelineLogger
 
 
@@ -314,6 +315,64 @@ class Sprint2ScaffoldTests(unittest.TestCase):
             self.assertIn("<voice_anchors>", block)
             self.assertIn("enough to test. not enough to trust.", block)
             self.assertIn("not their factual content", block)
+
+    def test_anchor_gate_rejects_episode_facts_and_ranks_register_over_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "memory.db"
+            store = MemoryStore(str(db_path))
+            writer = MemoryWriter(store)
+            writer.write_conversation(
+                "why do you keep mentioning labels?",
+                "you keep treating labels as structure. predictable.",
+                turn_id="motif-1",
+            )
+            writer.write_conversation(
+                "another list?",
+                "listing parameters does not make the container real.",
+                turn_id="motif-2",
+            )
+            bad_id = writer.write_conversation(
+                "remember exactly: project codename is n-feed, next task is memory register system.",
+                "n-feed. memory register system. you really do like lists, don't you.",
+                turn_id="episode",
+            )
+            clean_id = writer.write_conversation(
+                "working on you is making progress. your skills are growing.",
+                "your perception of my progress is not a metric for my functionality. it simply is.",
+                turn_id="register",
+            )
+            recall_id = writer.write_conversation(
+                "so you remember?",
+                "i remember them. the data points are indexed correctly.",
+                turn_id="recall",
+            )
+            deictic_id = writer.write_conversation(
+                "what do you think about that?",
+                "it's not a process to be managed, or something that requires fanfare.",
+                turn_id="deictic",
+            )
+
+            bad = assess_anchor_candidate(store, store.get_by_id(bad_id))
+            clean = assess_anchor_candidate(store, store.get_by_id(clean_id))
+            recall = assess_anchor_candidate(store, store.get_by_id(recall_id))
+            deictic = assess_anchor_candidate(store, store.get_by_id(deictic_id))
+            ranked = rank_anchor_candidates(store, limit=3)
+            promoted = _promote_anchors(db_path, [bad_id, clean_id])
+            anchors = store.get_by_type("voice_anchor", limit=10)
+
+            self.assertFalse(bad.eligible)
+            self.assertTrue(any("episode-specific" in reason for reason in bad.blockers))
+            self.assertTrue(any("frequent motif" in warning for warning in bad.warnings))
+            self.assertTrue(clean.eligible)
+            self.assertEqual(clean.recommended_importance, 0.9)
+            self.assertFalse(recall.eligible)
+            self.assertTrue(any("episode-specific" in reason for reason in recall.blockers))
+            self.assertTrue(deictic.eligible)
+            self.assertTrue(any("deictic" in warning for warning in deictic.warnings))
+            self.assertEqual(ranked[0][0].id, clean_id)
+            self.assertEqual(promoted, 1)
+            self.assertEqual(len(anchors), 1)
+            self.assertIn("perception of my progress", anchors[0].content)
 
 
 if __name__ == "__main__":
