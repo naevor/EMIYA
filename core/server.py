@@ -295,14 +295,17 @@ class EmiyaServer:
             recent = self.memory_retriever.get_recent(8)
             relevant = self.memory_retriever.search(user_text or "", limit=4)
             mood_matches = self.memory_retriever.by_mood(mood, limit=3)
+            anchors = self.memory_retriever.get_anchors(limit=4)
             seen = {memory["id"] for memory in relevant}
             relevant.extend(memory for memory in mood_matches if memory["id"] not in seen)
             context["recent_memory"] = recent
             context["relevant_memory"] = relevant[:6]
+            context["voice_anchors"] = anchors
         except Exception as e:
             print(f"[Memory] retrieval error: {e}")
             context["recent_memory"] = []
             context["relevant_memory"] = []
+            context["voice_anchors"] = []
 
         return context
 

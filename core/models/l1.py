@@ -125,7 +125,9 @@ ignore memory unless the user explicitly asks about prior conversation.
 """.strip()
         )
 
-    if context and not context.get("factual_mode") and ("recent_memory" in context or "relevant_memory" in context):
+    if context and not context.get("factual_mode") and (
+        "recent_memory" in context or "relevant_memory" in context or "voice_anchors" in context
+    ):
         try:
             from memory.retriever import build_memory_prompt_blocks
 
@@ -133,6 +135,7 @@ ignore memory unless the user explicitly asks about prior conversation.
                 build_memory_prompt_blocks(
                     context.get("recent_memory", []),
                     context.get("relevant_memory", []),
+                    voice_anchors=context.get("voice_anchors", []),
                 )
             )
         except Exception as e:
@@ -199,6 +202,7 @@ def _context_for_turn(context: dict | None, factual_mode: bool) -> dict | None:
     scoped["factual_mode"] = True
     scoped["recent_memory"] = []
     scoped["relevant_memory"] = []
+    scoped["voice_anchors"] = []
     return scoped
 
 

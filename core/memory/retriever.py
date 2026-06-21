@@ -1,4 +1,5 @@
 from html import escape, unescape
+import re
 from typing import Any
 
 from .store import Memory, MemoryStore
@@ -86,6 +87,52 @@ PROMPT_BLOCKED_PATTERNS = (
 )
 
 DEFAULT_IMPORTANCE_FLOOR = 0.2
+DEFAULT_ANCHOR_FLOOR = 0.7
+CONTEXT_MEMORY_TYPES = {"conversation", "trigger_event", "user_note"}
+TOKEN_RE = re.compile(r"[\w+#.-]{2,}", re.UNICODE)
+STOP_WORDS = {
+    "about",
+    "after",
+    "again",
+    "also",
+    "and",
+    "are",
+    "but",
+    "can",
+    "could",
+    "does",
+    "for",
+    "from",
+    "have",
+    "how",
+    "into",
+    "just",
+    "like",
+    "more",
+    "that",
+    "the",
+    "this",
+    "what",
+    "when",
+    "where",
+    "which",
+    "with",
+    "would",
+    "you",
+    "your",
+}
+
+
+def _tokens(value: str) -> set[str]:
+    return {
+        token.strip("._-").casefold()
+        for token in TOKEN_RE.findall(value or "")
+        if token.strip("._-") and token.casefold() not in STOP_WORDS
+    }
+
+
+def _is_context_memory(memory: Memory) -> bool:
+    return memory.type in CONTEXT_MEMORY_TYPES
 
 
 def is_prompt_safe_memory(
@@ -152,11 +199,14 @@ class MemoryRetriever:
         n: int = 20,
         importance_floor: float = DEFAULT_IMPORTANCE_FLOOR,
     ) -> list[dict[str, Any]]:
-        return [
-            memory.to_dict()
-            for memory in self.store.get_recent(n)
-            if is_prompt_safe_memory(memory, importance_floor)
+        requested = max(1, int(n))
+        candidates = self.store.get_recent(500)
+        safe = [
+            memory
+            for memory in candidates
+            if _is_context_memory(memory) and is_prompt_safe_memory(memory, importance_floor)
         ]
+        return [memory.to_dict() for memory in safe[-requested:]]
 
     def search(
         self,
@@ -164,11 +214,69 @@ class MemoryRetriever:
         limit: int = 5,
         importance_floor: float = DEFAULT_IMPORTANCE_FLOOR,
     ) -> list[dict[str, Any]]:
-        return [
-            memory.to_dict()
-            for memory in self.store.search(query, limit)
-            if is_prompt_safe_memory(memory, importance_floor)
+        query_tokens = _tokens(query)
+        if not query_tokens:
+            return []
+
+        candidates = [
+            memory
+            for memory in self.store.get_recent(500)
+            if _is_context_memory(memory) and is_prompt_safe_memory(memory, importance_floor)
         ]
+        if not candidates:
+            return []
+
+        groups: dict[str, dict[str, Any]] = {}
+        total = len(candidates)
+        normalized_query = " ".join((query or "").casefold().split())
+        for index, memory in enumerate(candidates):
+            group_key = memory.turn_id or f"memory:{memory.id}"
+            group = groups.setdefault(
+                group_key,
+                {
+                    "records": [],
+                    "tokens": set(),
+                    "importance": 0.0,
+                    "recency": 0.0,
+                    "exact": False,
+                },
+            )
+            group["records"].append(memory)
+            group["tokens"].update(_tokens(memory.content))
+            group["importance"] = max(group["importance"], memory.importance)
+            group["recency"] = max(group["recency"], (index + 1) / total)
+            normalized_content = " ".join(memory.content.casefold().split())
+            if len(normalized_query) >= 4 and normalized_query in normalized_content:
+                group["exact"] = True
+
+        ranked = []
+        for group in groups.values():
+            overlap = query_tokens & group["tokens"]
+            if not overlap:
+                continue
+            coverage = len(overlap) / len(query_tokens)
+            density = len(overlap) / max(1, len(group["tokens"]))
+            role_bonus = 0.25 if any(record.role == "assistant" for record in group["records"]) else 0.0
+            score = (
+                len(overlap) * 4.0
+                + coverage * 3.0
+                + density
+                + group["importance"] * 2.0
+                + group["recency"]
+                + role_bonus
+                + (2.0 if group["exact"] else 0.0)
+            )
+            ranked.append((score, group["records"]))
+
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        results: list[Memory] = []
+        requested = max(1, int(limit))
+        for _, records in ranked:
+            for memory in sorted(records, key=lambda item: item.id):
+                results.append(memory)
+                if len(results) >= requested:
+                    return [item.to_dict() for item in results]
+        return [item.to_dict() for item in results]
 
     def by_mood(
         self,
@@ -176,11 +284,27 @@ class MemoryRetriever:
         limit: int = 5,
         importance_floor: float = DEFAULT_IMPORTANCE_FLOOR,
     ) -> list[dict[str, Any]]:
-        return [
+        requested = max(1, int(limit))
+        candidates = self.store.by_mood(mood, max(50, requested * 10))
+        safe = [
             memory.to_dict()
-            for memory in self.store.by_mood(mood, limit)
-            if is_prompt_safe_memory(memory, importance_floor)
+            for memory in candidates
+            if _is_context_memory(memory) and is_prompt_safe_memory(memory, importance_floor)
         ]
+        return safe[:requested]
+
+    def get_anchors(
+        self,
+        limit: int = 4,
+        importance_floor: float = DEFAULT_ANCHOR_FLOOR,
+    ) -> list[dict[str, Any]]:
+        requested = max(1, int(limit))
+        anchors = [
+            memory.to_dict()
+            for memory in self.store.get_by_type("voice_anchor", max(20, requested * 5))
+            if memory.role == "assistant" and is_prompt_safe_memory(memory, importance_floor)
+        ]
+        return anchors[:requested]
 
 
 def _format_memory(memory: Memory | dict[str, Any]) -> str:
@@ -204,14 +328,38 @@ def _block(
     return f"<{name}>\n{body}\n</{name}>"
 
 
+def _anchor_block(
+    memories: list[Memory | dict[str, Any]],
+    importance_floor: float = DEFAULT_ANCHOR_FLOOR,
+) -> str:
+    memories = filter_prompt_safe_memories(memories, importance_floor)
+    examples = []
+    for memory in memories:
+        if isinstance(memory, Memory):
+            memory = memory.to_dict()
+        content = escape(_clean_memory_content(str(memory.get("content", ""))))
+        if content:
+            examples.append(f"- {content}")
+    body = "\n".join(examples) if examples else "empty"
+    return (
+        "<voice_anchors>\n"
+        "approved examples of emiya's voice. imitate their rhythm and restraint, "
+        "not their factual content.\n"
+        f"{body}\n"
+        "</voice_anchors>"
+    )
+
+
 def build_memory_prompt_blocks(
     recent_memory: list[Memory | dict[str, Any]] | None,
     relevant_memory: list[Memory | dict[str, Any]] | None,
     importance_floor: float = DEFAULT_IMPORTANCE_FLOOR,
+    voice_anchors: list[Memory | dict[str, Any]] | None = None,
 ) -> str:
     return "\n\n".join(
         [
             _block("recent_memory", recent_memory or [], importance_floor),
             _block("relevant_memory", relevant_memory or [], importance_floor),
+            _anchor_block(voice_anchors or []),
         ]
     )

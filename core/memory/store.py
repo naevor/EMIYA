@@ -7,7 +7,7 @@ from typing import Any
 from monitor import db
 
 
-MEMORY_TYPES = {"conversation", "observation", "trigger_event", "user_note"}
+MEMORY_TYPES = {"conversation", "observation", "trigger_event", "user_note", "voice_anchor"}
 
 
 @dataclass(frozen=True)
@@ -169,6 +169,37 @@ class MemoryStore:
         finally:
             conn.close()
         return [self._row_to_memory(row) for row in reversed(rows)]
+
+    def get_by_id(self, memory_id: int) -> Memory | None:
+        self.init_schema()
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT * FROM memories WHERE id = ?",
+                (int(memory_id),),
+            ).fetchone()
+        finally:
+            conn.close()
+        return self._row_to_memory(row) if row else None
+
+    def get_by_type(self, memory_type: str, limit: int = 20) -> list[Memory]:
+        if memory_type not in MEMORY_TYPES:
+            raise ValueError(f"unknown memory type: {memory_type}")
+        self.init_schema()
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT * FROM memories
+                WHERE type = ?
+                ORDER BY importance DESC, id DESC
+                LIMIT ?
+                """,
+                (memory_type, max(1, int(limit))),
+            ).fetchall()
+        finally:
+            conn.close()
+        return [self._row_to_memory(row) for row in rows]
 
     def search(self, query: str, limit: int = 5) -> list[Memory]:
         text = query.strip()

@@ -12,6 +12,7 @@ sys.path.insert(0, str(CORE))
 
 from memory.retriever import DEFAULT_IMPORTANCE_FLOOR, is_prompt_safe_memory  # noqa: E402
 from memory.store import MemoryStore  # noqa: E402
+from memory.writer import MemoryWriter  # noqa: E402
 
 
 def _connect(path: Path) -> sqlite3.Connection:
@@ -123,8 +124,34 @@ def _downgrade(conn: sqlite3.Connection, ids: list[int], importance: float) -> i
     return conn.total_changes - before
 
 
+def _promote_anchors(path: Path, memory_ids: list[int]) -> int:
+    store = MemoryStore(str(path))
+    writer = MemoryWriter(store)
+    promoted = 0
+    for memory_id in memory_ids:
+        memory = store.get_by_id(memory_id)
+        if memory is None:
+            print(f"anchor skipped: memory #{memory_id} not found")
+            continue
+        if memory.type != "conversation" or memory.role != "assistant":
+            print(f"anchor skipped: memory #{memory_id} is not an assistant conversation")
+            continue
+        if not is_prompt_safe_memory(memory, importance_floor=0.0):
+            print(f"anchor skipped: memory #{memory_id} is not prompt-safe")
+            continue
+
+        anchor_id = writer.write_voice_anchor(
+            memory.content,
+            mood_snapshot=memory.mood_snapshot,
+            source_memory_id=memory.id,
+        )
+        print(f"anchor ready: memory #{memory_id} -> voice_anchor #{anchor_id}")
+        promoted += 1
+    return promoted
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Inspect and optionally downgrade unsafe EMIYA memories.")
+    parser = argparse.ArgumentParser(description="Inspect, archive, and promote EMIYA memories.")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB, help="Path to emiya.db")
     parser.add_argument("--limit", type=int, default=10, help="Number of recent rows to print")
     parser.add_argument("--migrate", action="store_true", help="Run MemoryStore schema migration first")
@@ -148,6 +175,14 @@ def main() -> int:
         "--archive-all",
         action="store_true",
         help="Set every existing memory row to --downgrade-to without deleting it; useful after a persona reset",
+    )
+    parser.add_argument(
+        "--promote-anchor",
+        type=int,
+        action="append",
+        default=[],
+        metavar="MEMORY_ID",
+        help="Copy a prompt-safe assistant conversation into the voice-anchor pool; repeatable",
     )
     parser.add_argument("--downgrade-to", type=float, default=0.1, help="Importance value for downgraded rows")
     args = parser.parse_args()
@@ -203,6 +238,10 @@ def main() -> int:
             print(f"archived all memory rows: {changed}")
     finally:
         conn.close()
+
+    if args.promote_anchor:
+        promoted = _promote_anchors(args.db, args.promote_anchor)
+        print(f"promoted voice anchors: {promoted}")
 
     return 0
 
