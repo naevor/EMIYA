@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT / "core"))
 from memory.retriever import MemoryRetriever, build_memory_prompt_blocks
 from memory.retriever import filter_prompt_safe_memories
 from memory.retriever import is_prompt_safe_memory
-from memory.anchors import assess_anchor_candidate, rank_anchor_candidates
+from memory.anchors import assess_anchor_candidate, assess_anchor_text, rank_anchor_candidates
 from memory.store import MemoryStore
 from memory.writer import MemoryWriter
 from monitor.trigger_engine import FALLBACK_LINES
@@ -373,6 +373,38 @@ class Sprint2ScaffoldTests(unittest.TestCase):
             self.assertEqual(promoted, 1)
             self.assertEqual(len(anchors), 1)
             self.assertIn("perception of my progress", anchors[0].content)
+
+    def test_anchor_promotion_can_use_clean_excerpt_from_mixed_reply(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "memory.db"
+            store = MemoryStore(str(db_path))
+            writer = MemoryWriter(store)
+            mixed_id = writer.write_conversation(
+                "remember exactly: project codename is n-feed, next task is memory register system.",
+                (
+                    "n-feed. memory register system. "
+                    "your perception of my progress is not a metric for my functionality. it simply is."
+                ),
+                turn_id="mixed-anchor",
+            )
+            source = store.get_by_id(mixed_id)
+            excerpt = "your perception of my progress is not a metric for my functionality. it simply is."
+
+            full = assess_anchor_candidate(store, source)
+            excerpt_assessment = assess_anchor_text(store, source, excerpt)
+            promoted = _promote_anchors(db_path, [mixed_id], [excerpt])
+            repeated = _promote_anchors(db_path, [mixed_id], [excerpt])
+            anchors = store.get_by_type("voice_anchor", limit=10)
+
+            self.assertFalse(full.eligible)
+            self.assertTrue(any("episode-specific" in reason for reason in full.blockers))
+            self.assertTrue(excerpt_assessment.eligible)
+            self.assertEqual(promoted, 1)
+            self.assertEqual(repeated, 0)
+            self.assertEqual(len(anchors), 1)
+            self.assertEqual(anchors[0].content, excerpt)
+            self.assertIn("excerpt", anchors[0].tags)
+            self.assertIn(f"source:{mixed_id}", anchors[0].tags)
 
 
 if __name__ == "__main__":
