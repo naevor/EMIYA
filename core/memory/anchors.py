@@ -1,6 +1,7 @@
 import re
 from collections import Counter
 from dataclasses import dataclass
+from dataclasses import replace
 
 from .retriever import is_prompt_safe_memory
 from .store import Memory, MemoryStore
@@ -270,6 +271,12 @@ def assess_anchor_candidate(store: MemoryStore, memory: Memory) -> AnchorAssessm
         warnings=tuple(warnings),
         motifs=tuple(sorted(motifs)),
     )
+
+
+def assess_anchor_text(store: MemoryStore, source_memory: Memory, content: str) -> AnchorAssessment:
+    """Assess a manually selected voice excerpt against the source turn context."""
+    candidate = replace(source_memory, content=content.strip())
+    return assess_anchor_candidate(store, candidate)
 
 
 def rank_anchor_candidates(

@@ -11,7 +11,7 @@ DEFAULT_DB = CORE / "emiya.db"
 sys.path.insert(0, str(CORE))
 
 from memory.retriever import DEFAULT_IMPORTANCE_FLOOR, is_prompt_safe_memory  # noqa: E402
-from memory.anchors import assess_anchor_candidate, rank_anchor_candidates  # noqa: E402
+from memory.anchors import assess_anchor_candidate, assess_anchor_text, rank_anchor_candidates  # noqa: E402
 from memory.store import MemoryStore  # noqa: E402
 from memory.writer import MemoryWriter  # noqa: E402
 
@@ -125,11 +125,33 @@ def _downgrade(conn: sqlite3.Connection, ids: list[int], importance: float) -> i
     return conn.total_changes - before
 
 
-def _promote_anchors(path: Path, memory_ids: list[int]) -> int:
+def _anchor_text_for_index(anchor_texts: list[str], index: int) -> str | None:
+    if not anchor_texts:
+        return None
+    if len(anchor_texts) == 1:
+        return anchor_texts[0]
+    return anchor_texts[index]
+
+
+def _existing_anchor_id(store: MemoryStore, source_memory_id: int, content: str) -> int | None:
+    source_tag = f"source:{int(source_memory_id)}"
+    clean_content = content.strip()
+    for anchor in store.get_by_type("voice_anchor", limit=500):
+        if source_tag in anchor.tags and anchor.content.strip() == clean_content:
+            return anchor.id
+    return None
+
+
+def _promote_anchors(path: Path, memory_ids: list[int], anchor_texts: list[str] | None = None) -> int:
     store = MemoryStore(str(path))
     writer = MemoryWriter(store)
     promoted = 0
-    for memory_id in memory_ids:
+    anchor_texts = anchor_texts or []
+    if len(anchor_texts) > 1 and len(anchor_texts) != len(memory_ids):
+        print("anchor skipped: --anchor-text must be used once or match the number of --promote-anchor ids")
+        return 0
+
+    for index, memory_id in enumerate(memory_ids):
         memory = store.get_by_id(memory_id)
         if memory is None:
             print(f"anchor skipped: memory #{memory_id} not found")
@@ -138,7 +160,18 @@ def _promote_anchors(path: Path, memory_ids: list[int]) -> int:
             print(f"anchor skipped: memory #{memory_id} is not an assistant conversation")
             continue
 
-        assessment = assess_anchor_candidate(store, memory)
+        anchor_text = _anchor_text_for_index(anchor_texts, index)
+        content = anchor_text.strip() if anchor_text is not None else memory.content
+        existing_anchor_id = _existing_anchor_id(store, memory.id, content)
+        if existing_anchor_id is not None:
+            print(f"anchor already exists: memory #{memory_id} -> voice_anchor #{existing_anchor_id}")
+            continue
+
+        assessment = (
+            assess_anchor_text(store, memory, anchor_text)
+            if anchor_text is not None
+            else assess_anchor_candidate(store, memory)
+        )
         if not assessment.eligible:
             print(f"anchor skipped: memory #{memory_id}")
             for blocker in assessment.blockers:
@@ -147,11 +180,14 @@ def _promote_anchors(path: Path, memory_ids: list[int]) -> int:
                 print(f"  warn: {warning}")
             continue
 
+        tags = [f"motif:{motif}" for motif in assessment.motifs]
+        if anchor_text is not None:
+            tags.append("excerpt")
         anchor_id = writer.write_voice_anchor(
-            memory.content,
+            content,
             mood_snapshot=memory.mood_snapshot,
             importance=assessment.recommended_importance,
-            tags=[f"motif:{motif}" for motif in assessment.motifs],
+            tags=tags,
             source_memory_id=memory.id,
         )
         print(
@@ -212,6 +248,16 @@ def main() -> int:
         default=[],
         metavar="MEMORY_ID",
         help="Copy a prompt-safe assistant conversation into the voice-anchor pool; repeatable",
+    )
+    parser.add_argument(
+        "--anchor-text",
+        action="append",
+        default=[],
+        metavar="TEXT",
+        help=(
+            "Promote this exact voice excerpt instead of the full assistant reply. "
+            "Use once for one shared excerpt, or once per --promote-anchor id."
+        ),
     )
     parser.add_argument(
         "--anchor-candidates",
@@ -276,7 +322,7 @@ def main() -> int:
         conn.close()
 
     if args.promote_anchor:
-        promoted = _promote_anchors(args.db, args.promote_anchor)
+        promoted = _promote_anchors(args.db, args.promote_anchor, args.anchor_text)
         print(f"promoted voice anchors: {promoted}")
     if args.anchor_candidates > 0:
         _print_anchor_candidates(args.db, args.anchor_candidates)

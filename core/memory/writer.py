@@ -88,17 +88,19 @@ class MemoryWriter:
             return None
 
         source_tag = f"source:{int(source_memory_id)}" if source_memory_id is not None else None
-        if source_tag:
-            for anchor in self.store.get_by_type("voice_anchor", limit=500):
-                if source_tag in anchor.tags:
-                    return anchor.id
+        clean_content = content.strip()
+        for anchor in self.store.get_by_type("voice_anchor", limit=500):
+            if anchor.content.strip() != clean_content:
+                continue
+            if source_tag is None or source_tag in anchor.tags:
+                return anchor.id
 
         anchor_tags = ["voice_anchor", *(tags or [])]
         if source_tag:
             anchor_tags.append(source_tag)
         return self.store.add(
             "voice_anchor",
-            content,
+            clean_content,
             mood_snapshot=mood_snapshot,
             importance=max(0.7, importance),
             tags=anchor_tags,
