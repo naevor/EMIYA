@@ -100,12 +100,62 @@ def start_session():
     print(f"[DB] session #{session_id} started")
     return session_id
 
+
+def close_stale_sessions():
+    """Close sessions left open by an interrupted previous server process."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT id, started FROM sessions WHERE ended IS NULL ORDER BY id"
+        ).fetchall()
+        changed = 0
+        for row in rows:
+            session_id = int(row["id"])
+            event_timestamps = []
+            for table in ("window_log", "state_log", "trigger_log", "chat_log"):
+                event = conn.execute(
+                    f"SELECT MAX(timestamp) AS timestamp FROM {table} WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+                if event and event["timestamp"]:
+                    event_timestamps.append(event["timestamp"])
+
+            ended = max(event_timestamps, default=row["started"])
+            try:
+                duration = max(
+                    0,
+                    int(
+                        (
+                            datetime.fromisoformat(ended)
+                            - datetime.fromisoformat(row["started"])
+                        ).total_seconds()
+                    ),
+                )
+            except (TypeError, ValueError):
+                ended = row["started"]
+                duration = 0
+
+            conn.execute(
+                "UPDATE sessions SET ended = ?, duration = ? WHERE id = ? AND ended IS NULL",
+                (ended, duration, session_id),
+            )
+            changed += 1
+
+        conn.commit()
+        return changed
+    finally:
+        conn.close()
+
 def end_session(session_id):
     conn = get_connection()
     c = conn.cursor()
     now = datetime.now().isoformat()
     c.execute(
-        "UPDATE sessions SET ended=?, duration=(strftime('%s',?) - strftime('%s',started)) WHERE id=?",
+        """
+        UPDATE sessions
+        SET ended=?, duration=(strftime('%s',?) - strftime('%s',started))
+        WHERE id=? AND ended IS NULL
+        """,
         (now, now, session_id)
     )
     conn.commit()
