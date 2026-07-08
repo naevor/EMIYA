@@ -238,6 +238,49 @@ def log_chat_message(
     conn.commit()
     conn.close()
 
+
+def get_chat_log(limit=100):
+    """Return recent dialogue rows in chronological order for the UI."""
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM chat_log ORDER BY id DESC LIMIT ?",
+            (max(1, int(limit)),),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    entries = []
+    for row in reversed(rows):
+        metadata = None
+        if row["metadata"]:
+            try:
+                metadata = json.loads(row["metadata"])
+            except json.JSONDecodeError:
+                metadata = None
+        entries.append(
+            {
+                "id": int(row["id"]),
+                "timestamp": row["timestamp"],
+                "session_id": row["session_id"],
+                "turn_id": row["turn_id"],
+                "role": row["role"],
+                "source": row["source"],
+                "content": row["content"],
+                "thought": row["thought"],
+                "raw_response": row["raw_response"],
+                "model": row["model"],
+                "trigger": row["trigger"],
+                "mood": {
+                    "energy": row["mood_energy"],
+                    "focus": row["mood_focus"],
+                    "openness": row["mood_openness"],
+                },
+                "metadata": metadata,
+            }
+        )
+    return entries
+
 if __name__ == "__main__":
     init_db()
     sid = start_session()
