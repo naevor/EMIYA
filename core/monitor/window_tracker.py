@@ -55,10 +55,10 @@ def get_app_time(session_id, minutes=30):
         SELECT app_name, category, COUNT(*) as ticks
         FROM window_log
         WHERE session_id = ?
-          AND timestamp >= datetime('now', ? || ' minutes')
+          AND julianday(timestamp) >= julianday('now', 'localtime', ?)
         GROUP BY app_name
         ORDER BY ticks DESC
-    ''', (session_id, -minutes))
+    ''', (session_id, f"-{max(0, float(minutes)):g} minutes"))
     rows = c.fetchall()
     conn.close()
     # Each tick is 5 seconds.
@@ -75,9 +75,9 @@ def get_switch_count(session_id, minutes=10):
                    LAG(app_name) OVER (ORDER BY timestamp) as prev_app
             FROM window_log
             WHERE session_id = ?
-              AND timestamp >= datetime('now', ? || ' minutes')
+              AND julianday(timestamp) >= julianday('now', 'localtime', ?)
         ) WHERE app_name != prev_app AND prev_app IS NOT NULL
-    ''', (session_id, -minutes))
+    ''', (session_id, f"-{max(0, float(minutes)):g} minutes"))
     row = c.fetchone()
     conn.close()
     return row["cnt"] if row else 0
