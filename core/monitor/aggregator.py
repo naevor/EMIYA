@@ -26,7 +26,7 @@ class Aggregator:
         self.last_sys        = {}
         self.running         = False
 
-    def on_emiya_speak(self, trigger, message):
+    def on_emiya_speak(self, trigger, message, payload=None):
         """Handle an autonomous Emiya line."""
         print(f"\n{'═'*50}")
         print(f"  EMIYA  →  {message}")
