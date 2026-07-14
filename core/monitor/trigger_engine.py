@@ -1,6 +1,6 @@
 import random
 import uuid
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from monitor.db import log_chat_message, log_trigger
 
@@ -58,6 +58,13 @@ class TriggerEngine:
         self.fired_today = set()
         self._l0 = None
         self._last_fired_at: datetime | None = None
+        self._fired_day = date.today()
+        self.model_status = "standby"
+
+    def _reset_if_new_day(self, now: datetime) -> None:
+        if now.date() != self._fired_day:
+            self.fired_today.clear()
+            self._fired_day = now.date()
 
     def _is_on_cooldown(self) -> bool:
         if self._last_fired_at is None:
@@ -72,14 +79,17 @@ class TriggerEngine:
                 self._l0 = generate
             except Exception:
                 self._l0 = False
+                self.model_status = "offline"
         return self._l0 if self._l0 else None
 
     def _generate_message(self, trigger: str, context: dict) -> dict:
         l0 = self._get_l0()
         if l0:
+            self.model_status = "active"
             try:
                 result = l0(trigger, context, return_metadata=True)
                 if isinstance(result, dict) and result.get("content"):
+                    self.model_status = "standby"
                     return {
                         "content": result["content"],
                         "thought": result.get("thought"),
@@ -88,20 +98,32 @@ class TriggerEngine:
                         "source": "l0_trigger",
                     }
                 if isinstance(result, str) and result:
+                    self.model_status = "standby"
                     return {"content": result, "source": "l0_trigger"}
             except Exception as e:
                 print(f"[TriggerEngine] L0 unavailable: {e}")
+            self.model_status = "error"
         return {"content": get_fallback(trigger), "source": "fallback_trigger"}
 
     def check(self, states: set, session_stats: dict, mood: dict | None = None):
-        if self._is_on_cooldown():
+        now = datetime.now()
+        self._reset_if_new_day(now)
+
+        returning_from_afk = "afk_return" in states
+        if self._is_on_cooldown() and not returning_from_afk:
             return None
 
         trigger = None
-        hour = datetime.now().hour
+        hour = now.hour
         minutes = session_stats.get("active_minutes", 0)
 
-        if "grinding" in states and "late_night" in states:
+        if returning_from_afk:
+            trigger = "afk_return"
+        elif (
+            "grinding" in states
+            and "late_night" in states
+            and "late_night_grinding" not in self.fired_today
+        ):
             trigger = "late_night_grinding"
         elif "grinding" in states and "grinding" not in self.fired_today:
             trigger = "grinding"
@@ -145,10 +167,11 @@ class TriggerEngine:
         )
 
         if self.on_trigger:
-            self.on_trigger(trigger, message)
+            self.on_trigger(trigger, message, payload)
 
         print(f"[Trigger] {trigger} -> {message}")
         return trigger, message
 
     def reset_day(self):
         self.fired_today.clear()
+        self._fired_day = date.today()
