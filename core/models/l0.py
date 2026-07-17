@@ -10,7 +10,7 @@ from models.response_utils import (
 )
 
 
-MODEL = "qwen3:4b"
+MODEL = "qwen3:4b-instruct-2507-q4_K_M"
 OLLAMA_URL = "http://localhost:11434/api/chat"
 
 _prompt_file = Path(__file__).parent.parent / "prompts" / "l0.txt"
@@ -19,7 +19,7 @@ BASE_OPTIONS = {
     "temperature": 0.85,
     "top_p": 0.9,
     "num_predict": 100,
-    "thinking": False,
+    "num_ctx": 4096,
 }
 
 
@@ -112,9 +112,11 @@ def generate(trigger: str, context: dict, return_metadata: bool = False) -> str 
                     {"role": "user", "content": build_user_prompt(trigger, context)},
                 ],
                 "stream": False,
+                "think": False,
                 "options": options,
+                "keep_alive": "2m",
             },
-            timeout=20,
+            timeout=(5, 45),
         )
 
         if response.status_code == 200:
