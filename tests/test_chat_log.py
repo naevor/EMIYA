@@ -58,6 +58,12 @@ class ChatLogTests(unittest.TestCase):
                 self.assertEqual(row[5], 0.2)
                 self.assertEqual(row[6], 0.8)
                 self.assertEqual(row[7], 0.4)
+
+                entries = db.get_chat_log(limit=10)
+                self.assertEqual(len(entries), 1)
+                self.assertEqual(entries[0]["source"], "l1")
+                self.assertEqual(entries[0]["thought"], "hidden reasoning")
+                self.assertEqual(entries[0]["mood"]["focus"], 0.8)
         finally:
             db.DB_PATH = original_path
 
