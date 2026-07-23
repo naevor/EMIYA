@@ -21,6 +21,7 @@ class Memory:
     tags: list[str]
     role: str | None = None
     turn_id: str | None = None
+    archived_at: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -33,6 +34,7 @@ class Memory:
             "tags": self.tags,
             "role": self.role,
             "turn_id": self.turn_id,
+            "archived_at": self.archived_at,
         }
 
 
@@ -83,6 +85,8 @@ class MemoryStore:
             conn.execute("ALTER TABLE memories ADD COLUMN role TEXT")
         if "turn_id" not in columns:
             conn.execute("ALTER TABLE memories ADD COLUMN turn_id TEXT")
+        if "archived_at" not in columns:
+            conn.execute("ALTER TABLE memories ADD COLUMN archived_at TEXT")
 
     def init_schema(self) -> None:
         conn = self._connect()
@@ -98,7 +102,8 @@ class MemoryStore:
                     importance    REAL DEFAULT 0.5,
                     tags          TEXT,
                     role          TEXT,
-                    turn_id       TEXT
+                    turn_id       TEXT,
+                    archived_at   TEXT
                 )
                 """
             )
@@ -108,6 +113,7 @@ class MemoryStore:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_content ON memories(content)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_role ON memories(role, id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_turn ON memories(turn_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_archive ON memories(archived_at, id)")
             conn.commit()
         finally:
             conn.close()
@@ -123,38 +129,86 @@ class MemoryStore:
         role: str | None = None,
         turn_id: str | None = None,
     ) -> int:
+        return self.add_many(
+            [
+                {
+                    "memory_type": memory_type,
+                    "content": content,
+                    "mood_snapshot": mood_snapshot,
+                    "importance": importance,
+                    "tags": tags,
+                    "timestamp": timestamp,
+                    "role": role,
+                    "turn_id": turn_id,
+                }
+            ]
+        )[0]
+
+    def _prepare_record(self, record: dict[str, Any]) -> tuple[Any, ...]:
+        memory_type = str(record.get("memory_type", ""))
         if memory_type not in MEMORY_TYPES:
             raise ValueError(f"unknown memory type: {memory_type}")
-        text = content.strip()
+        text = str(record.get("content", "")).strip()
         if not text:
             raise ValueError("memory content cannot be empty")
+        role = record.get("role")
+        turn_id = record.get("turn_id")
         clean_role = role.strip().lower() if isinstance(role, str) and role.strip() else None
         clean_turn_id = turn_id.strip() if isinstance(turn_id, str) and turn_id.strip() else None
+        importance = max(0.0, min(1.0, float(record.get("importance", 0.5))))
+        return (
+            record.get("timestamp") or datetime.now().isoformat(timespec="seconds"),
+            memory_type,
+            text,
+            json.dumps(record.get("mood_snapshot") or {}, ensure_ascii=False),
+            importance,
+            json.dumps(record.get("tags") or [], ensure_ascii=False),
+            clean_role,
+            clean_turn_id,
+        )
 
+    def _insert_prepared(self, conn: sqlite3.Connection, values: tuple[Any, ...]) -> int:
+        cur = conn.execute(
+            """
+            INSERT INTO memories (
+                timestamp, type, content, mood_snapshot, importance, tags, role, turn_id
+            ) VALUES (?,?,?,?,?,?,?,?)
+            """,
+            values,
+        )
+        return int(cur.lastrowid)
+
+    def add_many(self, records: list[dict[str, Any]]) -> list[int]:
+        if not records:
+            return []
+        prepared = [self._prepare_record(record) for record in records]
         self.init_schema()
-        importance = max(0.0, min(1.0, float(importance)))
         conn = self._connect()
         try:
-            cur = conn.execute(
-                """
-                INSERT INTO memories (
-                    timestamp, type, content, mood_snapshot, importance, tags, role, turn_id
-                ) VALUES (?,?,?,?,?,?,?,?)
-                """,
-                (
-                    timestamp or datetime.now().isoformat(timespec="seconds"),
-                    memory_type,
-                    text,
-                    json.dumps(mood_snapshot or {}, ensure_ascii=False),
-                    importance,
-                    json.dumps(tags or [], ensure_ascii=False),
-                    clean_role,
-                    clean_turn_id,
-                ),
-            )
-            memory_id = int(cur.lastrowid)
-            conn.commit()
-            return memory_id
+            with conn:
+                return [self._insert_prepared(conn, values) for values in prepared]
+        finally:
+            conn.close()
+
+    def archive(self, memory_ids: list[int], timestamp: str | None = None) -> int:
+        ids = sorted({int(memory_id) for memory_id in memory_ids})
+        if not ids:
+            return 0
+        self.init_schema()
+        archived_at = timestamp or datetime.now().isoformat(timespec="seconds")
+        conn = self._connect()
+        try:
+            before = conn.total_changes
+            with conn:
+                conn.executemany(
+                    """
+                    UPDATE memories
+                    SET archived_at = COALESCE(archived_at, ?)
+                    WHERE id = ?
+                    """,
+                    [(archived_at, memory_id) for memory_id in ids],
+                )
+            return conn.total_changes - before
         finally:
             conn.close()
 
@@ -244,4 +298,5 @@ class MemoryStore:
             tags=_json_loads(row["tags"], []),
             role=row["role"] if "role" in row.keys() else None,
             turn_id=row["turn_id"] if "turn_id" in row.keys() else None,
+            archived_at=row["archived_at"] if "archived_at" in row.keys() else None,
         )
