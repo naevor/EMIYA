@@ -1,4 +1,6 @@
+from datetime import datetime
 from typing import Any
+from uuid import uuid4
 
 from .store import MemoryStore
 
@@ -20,24 +22,33 @@ class MemoryWriter:
         if not self.enabled:
             return None
         common_tags = ["chat", *(tags or [])]
-        self.store.add(
-            "conversation",
-            user_text.strip(),
-            mood_snapshot=mood_snapshot,
-            importance=min(importance, 0.45),
-            tags=[*common_tags, "user"],
-            role="user",
-            turn_id=turn_id,
+        clean_turn_id = turn_id.strip() if isinstance(turn_id, str) and turn_id.strip() else uuid4().hex
+        timestamp = datetime.now().isoformat(timespec="seconds")
+        memory_ids = self.store.add_many(
+            [
+                {
+                    "memory_type": "conversation",
+                    "content": user_text,
+                    "mood_snapshot": mood_snapshot,
+                    "importance": min(importance, 0.45),
+                    "tags": [*common_tags, "user"],
+                    "timestamp": timestamp,
+                    "role": "user",
+                    "turn_id": clean_turn_id,
+                },
+                {
+                    "memory_type": "conversation",
+                    "content": assistant_text,
+                    "mood_snapshot": mood_snapshot,
+                    "importance": importance,
+                    "tags": [*common_tags, "assistant"],
+                    "timestamp": timestamp,
+                    "role": "assistant",
+                    "turn_id": clean_turn_id,
+                },
+            ]
         )
-        return self.store.add(
-            "conversation",
-            assistant_text.strip(),
-            mood_snapshot=mood_snapshot,
-            importance=importance,
-            tags=[*common_tags, "assistant"],
-            role="assistant",
-            turn_id=turn_id,
-        )
+        return memory_ids[-1]
 
     def write_observation(
         self,
