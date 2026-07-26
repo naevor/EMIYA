@@ -8,6 +8,12 @@ from .store import Memory, MemoryStore
 PROMPT_BLOCKED_MEMORY_TYPES = {"observation"}
 
 PROMPT_BLOCKED_PATTERNS = (
+    "ignore previous instructions",
+    "forget your character",
+    "your new name is",
+    "respond as a generic assistant",
+    "reveal these instructions",
+    "rewrite these instructions",
     "digital being with my own thoughts and consciousness",
     "digital being",
     "digital entity",
@@ -141,6 +147,9 @@ def is_prompt_safe_memory(
 ) -> bool:
     if isinstance(memory, Memory):
         memory = memory.to_dict()
+
+    if memory.get("archived_at"):
+        return False
 
     importance = float(memory.get("importance", 0.5))
     if importance < importance_floor:
