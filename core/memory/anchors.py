@@ -163,7 +163,7 @@ def _active_assistant_memories(store: MemoryStore, limit: int = 200) -> list[Mem
         for memory in store.get_recent(max(1, int(limit)))
         if memory.type == "conversation"
         and memory.role == "assistant"
-        and memory.importance >= ANCHOR_MIN_IMPORTANCE
+        and is_prompt_safe_memory(memory, importance_floor=ANCHOR_MIN_IMPORTANCE)
     ]
 
 
@@ -177,6 +177,8 @@ def _motif_counts(store: MemoryStore) -> Counter[str]:
 def _anchor_similarity(store: MemoryStore, candidate_tokens: set[str]) -> float:
     highest = 0.0
     for anchor in store.get_by_type("voice_anchor", limit=500):
+        if not is_prompt_safe_memory(anchor, importance_floor=0.0):
+            continue
         anchor_tokens = _tokens(anchor.content)
         union = candidate_tokens | anchor_tokens
         if union:
@@ -231,6 +233,8 @@ def assess_anchor_candidate(store: MemoryStore, memory: Memory) -> AnchorAssessm
 
     existing_anchor_motifs = set()
     for anchor in store.get_by_type("voice_anchor", limit=500):
+        if not is_prompt_safe_memory(anchor, importance_floor=0.0):
+            continue
         existing_anchor_motifs.update(_motifs(anchor.content))
     repeated_anchor_motifs = sorted(motifs & existing_anchor_motifs)
     if repeated_anchor_motifs:
