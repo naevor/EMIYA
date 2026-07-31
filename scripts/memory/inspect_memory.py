@@ -1,6 +1,7 @@
 import argparse
 import sqlite3
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -29,9 +30,10 @@ def _columns(conn: sqlite3.Connection) -> set[str]:
 def _select_columns(columns: set[str]) -> str:
     role_expr = "role" if "role" in columns else "NULL AS role"
     turn_expr = "turn_id" if "turn_id" in columns else "NULL AS turn_id"
+    archive_expr = "archived_at" if "archived_at" in columns else "NULL AS archived_at"
     return (
         "id, timestamp, type, content, mood_snapshot, importance, tags, "
-        f"{role_expr}, {turn_expr}"
+        f"{role_expr}, {turn_expr}, {archive_expr}"
     )
 
 
@@ -41,15 +43,21 @@ def _row_to_memory(row: sqlite3.Row) -> dict[str, Any]:
 
 def _print_counts(conn: sqlite3.Connection, columns: set[str]) -> None:
     if "role" in columns:
-        query = """
-            SELECT type, COALESCE(role, 'legacy') AS role, COUNT(*) AS count
+        archive_expr = (
+            "CASE WHEN archived_at IS NULL THEN 'active' ELSE 'archived' END"
+            if "archived_at" in columns
+            else "'active'"
+        )
+        query = f"""
+            SELECT type, COALESCE(role, 'legacy') AS role,
+                   {archive_expr} AS archive_status, COUNT(*) AS count
             FROM memories
-            GROUP BY type, role
-            ORDER BY type, role
+            GROUP BY type, role, archive_status
+            ORDER BY type, role, archive_status
         """
         print("memory counts by type/role:")
         for row in conn.execute(query):
-            print(f"  {row['type']}/{row['role']}: {row['count']}")
+            print(f"  {row['type']}/{row['role']}/{row['archive_status']}: {row['count']}")
         return
 
     print("memory counts by type:")
@@ -82,11 +90,13 @@ def _legacy(conn: sqlite3.Connection, columns: set[str]) -> list[dict[str, Any]]
     if "role" not in columns:
         rows = conn.execute(f"SELECT {selected} FROM memories ORDER BY id DESC").fetchall()
     else:
+        archive_clause = "AND archived_at IS NULL" if "archived_at" in columns else ""
         rows = conn.execute(
             f"""
             SELECT {selected}
             FROM memories
-            WHERE role IS NULL OR TRIM(role) = ''
+            WHERE (role IS NULL OR TRIM(role) = '')
+            {archive_clause}
             ORDER BY id DESC
             """
         ).fetchall()
@@ -120,6 +130,26 @@ def _downgrade(conn: sqlite3.Connection, ids: list[int], importance: float) -> i
         WHERE id = ?
         """,
         [(importance, importance, memory_id) for memory_id in ids],
+    )
+    conn.commit()
+    return conn.total_changes - before
+
+
+def _archive(conn: sqlite3.Connection, ids: list[int], archived_at: str | None = None) -> int:
+    if not ids:
+        return 0
+    columns = _columns(conn)
+    if "archived_at" not in columns:
+        raise RuntimeError("memories.archived_at is missing; run with --migrate first")
+    before = conn.total_changes
+    timestamp = archived_at or datetime.now().isoformat(timespec="seconds")
+    conn.executemany(
+        """
+        UPDATE memories
+        SET archived_at = COALESCE(archived_at, ?)
+        WHERE id = ?
+        """,
+        [(timestamp, memory_id) for memory_id in ids],
     )
     conn.commit()
     return conn.total_changes - before
@@ -234,12 +264,17 @@ def main() -> int:
     parser.add_argument(
         "--downgrade-legacy",
         action="store_true",
-        help="Set legacy rows with no role to --downgrade-to so old persona data stays out of retrieval",
+        help="Deprecated soft archive: lower legacy importance without setting archived_at",
+    )
+    parser.add_argument(
+        "--archive-legacy",
+        action="store_true",
+        help="Archive unversioned rows with no role so retrieval cannot return them at any importance floor",
     )
     parser.add_argument(
         "--archive-all",
         action="store_true",
-        help="Set every existing memory row to --downgrade-to without deleting it; useful after a persona reset",
+        help="Archive every existing memory row without deleting it; useful after a persona reset",
     )
     parser.add_argument(
         "--promote-anchor",
@@ -314,9 +349,13 @@ def main() -> int:
             changed = _downgrade(conn, [int(memory["id"]) for memory in legacy], args.downgrade_to)
             print(f"downgraded legacy rows: {changed}")
 
+        if args.archive_legacy:
+            changed = _archive(conn, [int(memory["id"]) for memory in legacy])
+            print(f"archived legacy rows: {changed}")
+
         if args.archive_all:
             all_rows = _all_rows(conn, columns)
-            changed = _downgrade(conn, [int(memory["id"]) for memory in all_rows], args.downgrade_to)
+            changed = _archive(conn, [int(memory["id"]) for memory in all_rows])
             print(f"archived all memory rows: {changed}")
     finally:
         conn.close()
