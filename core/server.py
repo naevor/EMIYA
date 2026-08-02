@@ -5,6 +5,8 @@ import sys
 import threading
 import time
 import uuid
+from collections import deque
+from contextlib import suppress
 from datetime import datetime
 
 import websockets
@@ -12,7 +14,15 @@ import websockets
 from memory.retriever import MemoryRetriever
 from memory.store import MemoryStore
 from memory.writer import MemoryWriter
-from monitor.db import init_db, log_chat_message, log_state, start_session
+from monitor.db import (
+    close_stale_sessions,
+    end_session,
+    get_chat_log,
+    init_db,
+    log_chat_message,
+    log_state,
+    start_session,
+)
 from monitor.session_tracker import SessionTracker
 from monitor.state_modifiers import states_to_activity_hints
 from monitor.system_tracker import SystemTracker
@@ -63,6 +73,9 @@ def configure_output_encoding():
 class EmiyaServer:
     def __init__(self):
         init_db()
+        stale_sessions = close_stale_sessions()
+        if stale_sessions:
+            print(f"[DB] closed {stale_sessions} stale session(s)")
         self.session_id = start_session()
         self.session_tracker = SessionTracker(self.session_id)
         self.window_tracker = WindowTracker(self.session_id, interval=5)
@@ -80,17 +93,24 @@ class EmiyaServer:
         self.pipeline_dump_enabled = env_flag("EMIYA_PIPELINE_DUMP", default=False)
         self.traits = load_traits()
         self.personality_presets = load_presets()
+        self._started_at = datetime.now().isoformat(timespec="seconds")
+        self._started_monotonic = time.monotonic()
         self.last_sys = {}
         self.clients = set()
         self.telemetry_clients = set()
         self.pending_message = None
         self.chat_history = []
         self._l1 = None
+        self._l1_status = "standby"
+        self._last_reply_metadata = {}
         self._last_states = set()
         self._current_states = {"normal"}
         self._current_apps = []
         self._current_stats = self.session_tracker.get_stats()
         self._chat_lock = None
+        self._chat_log_dirty = threading.Event()
+        self.mood_influence = deque(maxlen=50)
+        self._shutdown_complete = False
 
     def get_l1(self):
         if self._l1 is None:
@@ -100,6 +120,7 @@ class EmiyaServer:
                 self._l1 = chat
             except Exception:
                 self._l1 = False
+                self._l1_status = "offline"
         return self._l1 if self._l1 else None
 
     def analyze_state(self):
@@ -136,6 +157,14 @@ class EmiyaServer:
             if state in STATE_NUDGES:
                 axis, delta = STATE_NUDGES[state]
                 self.mood_engine.nudge(axis, delta)
+                self.mood_influence.append(
+                    {
+                        "source": state,
+                        "axis": axis,
+                        "delta": delta,
+                        "timestamp": datetime.now().isoformat(timespec="milliseconds"),
+                    }
+                )
                 print(f"[Mood] nudge from '{state}': {axis} {delta:+.1f}")
                 try:
                     self.memory_writer.write_observation(
@@ -147,8 +176,16 @@ class EmiyaServer:
                     print(f"[Memory] observation write error: {e}")
         self._last_states = states
 
-    def on_emiya_speak(self, trigger, message):
-        self.pending_message = {"trigger": trigger, "message": message}
+    def on_emiya_speak(self, trigger, message, payload=None):
+        payload = payload or {}
+        self.pending_message = {
+            "trigger": trigger,
+            "message": message,
+            "source": payload.get("source", "fallback_trigger"),
+            "model": payload.get("model"),
+            "thought": payload.get("thought"),
+        }
+        self._chat_log_dirty.set()
         self.chat_history.append({"role": "assistant", "content": message})
         try:
             self.memory_writer.write_trigger_event(
@@ -183,9 +220,11 @@ class EmiyaServer:
             turn_id=turn_id,
             mood=mood,
         )
+        self._chat_log_dirty.set()
 
         l1_fn = self.get_l1()
         if l1_fn:
+            self._l1_status = "active"
             try:
                 started = time.perf_counter()
                 result = l1_fn(self.chat_history[-10:], context, return_metadata=True)
@@ -222,6 +261,12 @@ class EmiyaServer:
                 )
 
                 if response:
+                    self._l1_status = "standby"
+                    self._last_reply_metadata = {
+                        "source": "l1",
+                        "model": model,
+                        "thought": thought,
+                    }
                     self.chat_history.append({"role": "assistant", "content": response})
                     log_chat_message(
                         session_id=self.session_id,
@@ -234,6 +279,7 @@ class EmiyaServer:
                         model=model,
                         mood=context.get("mood"),
                     )
+                    self._chat_log_dirty.set()
                     self.memory_writer.write_conversation(
                         text,
                         response,
@@ -251,6 +297,9 @@ class EmiyaServer:
             except Exception as e:
                 print(f"[L1] error: {e}")
                 pipeline_logger.add_step(turn_id, "L1", status="error", details={"error": str(e)})
+            self._l1_status = "error"
+        else:
+            self._l1_status = "offline"
 
         log_chat_message(
             session_id=self.session_id,
@@ -260,6 +309,8 @@ class EmiyaServer:
             turn_id=turn_id,
             mood=mood,
         )
+        self._chat_log_dirty.set()
+        self._last_reply_metadata = {"source": "fallback", "model": None, "thought": None}
         self.memory_writer.write_conversation(
             text,
             "...",
@@ -328,6 +379,8 @@ class EmiyaServer:
             "ram_used_gb": self.last_sys.get("ram_used_gb"),
             "ram_total_gb": self.last_sys.get("ram_total_gb"),
             "top_processes": self.last_sys.get("top_processes", []),
+            "uptime": self._uptime(),
+            "started_at": self._started_at,
         }
         params = {
             "sigma": mood_state.sigma,
@@ -349,12 +402,18 @@ class EmiyaServer:
             "ram": self.last_sys.get("ram_percent", 0),
             "sys": sys_state,
             "params": params,
-            "models": {"L-meta": "active", "L0": "active", "L1": "standby", "L2": "offline"},
+            "models": {
+                "L-meta": "inactive",
+                "L0": self.trigger_engine.model_status,
+                "L1": self._l1_status,
+                "L2": "inactive",
+            },
             "memory": {"writes_enabled": self.memory_writes_enabled},
             "emiya": self.pending_message,
             "traits": self.traits.to_dict(),
             "personality_presets": list(self.personality_presets.keys()),
             "pipeline": pipeline_logger.recent(20, compact=True),
+            "influence": list(self.mood_influence),
             "mood": {
                 "x": round(mood_state.x, 4),
                 "y": round(mood_state.y, 4),
@@ -374,6 +433,20 @@ class EmiyaServer:
         }
         self.pending_message = None
         return packet
+
+    def _uptime(self) -> str:
+        elapsed = max(0, int(time.monotonic() - self._started_monotonic))
+        hours, remainder = divmod(elapsed, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+    @staticmethod
+    def build_chat_log_packet():
+        return {
+            "type": "chat_log_update",
+            "timestamp": datetime.now().isoformat(timespec="milliseconds"),
+            "entries": get_chat_log(100),
+        }
 
     async def broadcast(self, packet):
         if not self.clients:
@@ -436,6 +509,7 @@ class EmiyaServer:
         self.clients.add(websocket)
         print("[WS] client connected")
         try:
+            await websocket.send(json.dumps(self.build_chat_log_packet(), ensure_ascii=False))
             async for msg in websocket:
                 data = json.loads(msg)
 
@@ -451,6 +525,7 @@ class EmiyaServer:
                             {
                                 "type": "emiya_reply",
                                 "message": response,
+                                **self._last_reply_metadata,
                             },
                             ensure_ascii=False,
                         )
@@ -494,8 +569,10 @@ class EmiyaServer:
         ).start()
 
     def monitor_tick(self):
-        self.session_tracker.ping()
+        activity_transition = self.session_tracker.poll_activity()
         states = self.analyze_state()
+        if activity_transition == "afk_return":
+            states.add("afk_return")
         stats = self.session_tracker.get_stats()
         apps = get_app_time(self.session_id, minutes=30)
 
@@ -522,6 +599,9 @@ class EmiyaServer:
 
     async def broadcast_loop(self):
         while True:
+            if self._chat_log_dirty.is_set():
+                self._chat_log_dirty.clear()
+                await self.broadcast(self.build_chat_log_packet())
             await self.broadcast(self.build_state_packet())
             await asyncio.sleep(BROADCAST_INTERVAL)
 
@@ -539,7 +619,7 @@ class EmiyaServer:
 
     async def main(self):
         self.run_trackers()
-        asyncio.create_task(self.mood_engine.run())
+        mood_task = asyncio.create_task(self.mood_engine.run())
         print("[Mood] engine started")
         if not self.memory_writes_enabled:
             print("[Memory] writes disabled by EMIYA_MEMORY_WRITES=0")
@@ -547,8 +627,23 @@ class EmiyaServer:
             print("[Telemetry] pipeline JSONL dump enabled")
 
         print(f"[EMIYA] server -> ws://{HOST}:{PORT}")
-        async with websockets.serve(self.handler, HOST, PORT):
-            await self.loop()
+        try:
+            async with websockets.serve(self.handler, HOST, PORT):
+                await self.loop()
+        finally:
+            self.shutdown()
+            mood_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await mood_task
+
+    def shutdown(self) -> None:
+        if self._shutdown_complete:
+            return
+        self._shutdown_complete = True
+        self.window_tracker.stop()
+        self.system_tracker.stop()
+        self.mood_engine.stop()
+        end_session(self.session_id)
 
 
 if __name__ == "__main__":
