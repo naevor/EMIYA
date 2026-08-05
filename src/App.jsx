@@ -64,6 +64,13 @@ const DEFAULT_TRAITS = {
 };
 
 const DEFAULT_PERSONALITY_PRESETS = ['default', 'unhinged', 'professional', 'tired friend'];
+const MODEL_RECENT_MS = 60_000;
+const DEFAULT_MODELS = {
+  'L-meta': 'inactive',
+  L0: 'standby',
+  L1: 'standby',
+  L2: 'inactive',
+};
 
 const hasNumber = (v) => typeof v === 'number' && Number.isFinite(v);
 
@@ -112,7 +119,49 @@ const toTriggerEvent = (emiya, timestamp) => {
     timestamp: timestamp ?? new Date().toISOString(),
     trigger: emiya.trigger ?? 'l0',
     message: emiya.message,
+    source: emiya.source ?? 'fallback_trigger',
+    model: emiya.model ?? null,
+    thought: emiya.thought ?? null,
   };
+};
+
+const autonomousModelLabel = (event) => {
+  if (event?.model) return event.model;
+  return event?.source === 'l0_trigger' ? 'L0' : 'FALLBACK';
+};
+
+const applyModelStatuses = (incoming, backendStatusesRef, timersRef, setModels) => {
+  const displayPatch = {};
+
+  Object.entries(incoming ?? {}).forEach(([id, status]) => {
+    const previousBackendStatus = backendStatusesRef.current[id];
+    const existingTimer = timersRef.current[id];
+
+    if (status === 'active') {
+      clearTimeout(existingTimer);
+      delete timersRef.current[id];
+      displayPatch[id] = 'active';
+    } else if (status === 'standby' && previousBackendStatus === 'active') {
+      clearTimeout(existingTimer);
+      displayPatch[id] = 'recent';
+      timersRef.current[id] = setTimeout(() => {
+        delete timersRef.current[id];
+        setModels((current) => (
+          current[id] === 'recent' ? { ...current, [id]: 'standby' } : current
+        ));
+      }, MODEL_RECENT_MS);
+    } else if (status === 'standby' && existingTimer) {
+      displayPatch[id] = 'recent';
+    } else {
+      clearTimeout(existingTimer);
+      delete timersRef.current[id];
+      displayPatch[id] = status;
+    }
+
+    backendStatusesRef.current[id] = status;
+  });
+
+  setModels((current) => ({ ...current, ...displayPatch }));
 };
 
 export default function App() {
@@ -123,16 +172,14 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const wsRef = useRef(null);
   const telemetryConnectedRef = useRef(false);
-
-  /* ─── L1 activity tracking ─── */
-  const [l1Status,  setL1Status]  = useState('awaiting');
-  const l1TimerRef = useRef(null);
+  const backendModelStatusesRef = useRef(DEFAULT_MODELS);
+  const modelStatusTimersRef = useRef({});
 
   /* ─── live state ─── */
   const [trail,         setTrail]         = useState([]);
   const [currentMood,   setCurrentMood]   = useState(null);
   const [params,        setParams]        = useState({ sigma: 10, rho: 28, beta: 2.667 });
-  const [models,        setModels]        = useState({ 'L-meta': 'active', L0: 'active', L1: 'standby', L2: 'offline' });
+  const [models,        setModels]        = useState(DEFAULT_MODELS);
   const [sys,           setSys]           = useState({});
   const [apps,          setApps]          = useState([]);
   const [states,        setStates]        = useState([]);
@@ -198,7 +245,14 @@ export default function App() {
             if (payload.trail)        setTrail(payload.trail);
             const nextParams = normalizeParams(payload);
             if (nextParams)           setParams(nextParams);
-            if (payload.models)       setModels(payload.models);
+            if (payload.models) {
+              applyModelStatuses(
+                payload.models,
+                backendModelStatusesRef,
+                modelStatusTimersRef,
+                setModels,
+              );
+            }
             const nextSys = normalizeSys(payload);
             if (nextSys)              setSys((s) => ({ ...s, ...nextSys }));
             if (payload.apps)         setApps(normalizeApps(payload.apps));
@@ -219,9 +273,10 @@ export default function App() {
                   role: 'emiya',
                   content:   autonomous.message,
                   timestamp: autonomous.timestamp,
-                  model:     'L0',
-                  thought:   null,
+                  model:     autonomousModelLabel(autonomous),
+                  thought:   autonomous.thought,
                   trigger:   autonomous.trigger,
+                  source:    autonomous.source,
                 },
               ]);
             }
@@ -229,17 +284,15 @@ export default function App() {
 
           if (data.type === 'emiya_reply') {
             setIsWaiting(false);
-            clearTimeout(l1TimerRef.current);
-            setL1Status('active');
-            l1TimerRef.current = setTimeout(() => setL1Status('awaiting'), 5 * 60 * 1000);
             setMessages((m) => [
               ...m,
               {
                 role: 'emiya',
                 content:   data.message,
                 timestamp: new Date().toISOString(),
-                model:     data.model     ?? 'L1',
+                model:     data.model ?? (data.source === 'fallback' ? 'FALLBACK' : 'L1'),
                 thought:   data.thought   ?? null,
+                source:    data.source    ?? 'l1',
               },
             ]);
           }
@@ -258,9 +311,10 @@ export default function App() {
                 role: 'emiya',
                 content:   data.message,
                 timestamp: new Date().toISOString(),
-                model:     'L0',
-                thought:   null,
+                model:     data.model ?? (data.source === 'l0_trigger' ? 'L0' : 'FALLBACK'),
+                thought:   data.thought ?? null,
                 trigger:   data.trigger,
+                source:    data.source ?? 'fallback_trigger',
               },
             ]);
           }
@@ -293,6 +347,10 @@ export default function App() {
       clearTimeout(reconnectTimer);
       if (ws) ws.close();
     };
+  }, []);
+
+  useEffect(() => () => {
+    Object.values(modelStatusTimersRef.current).forEach(clearTimeout);
   }, []);
 
   /* pipeline telemetry channel */
@@ -351,8 +409,6 @@ export default function App() {
       { role: 'user', content: text, timestamp: new Date().toISOString() },
     ]);
     setIsWaiting(true);
-    clearTimeout(l1TimerRef.current);
-    setL1Status('active');
     wsRef.current.send(JSON.stringify({ type: 'user_message', text }));
   };
 
@@ -460,7 +516,7 @@ export default function App() {
             onChange={handleTraitsChange}
             onPreset={handleTraitsPreset}
           />
-          <ModelsPanel models={{ ...models, L1: l1Status }} />
+          <ModelsPanel models={models} />
           <PipelineView runs={pipeline} />
         </aside>
       </div>
