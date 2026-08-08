@@ -9,14 +9,20 @@ const STATUS_LABELS = {
   active:   'ACTIVE',
   awaiting: 'AWAIT',
   standby:  'STANDBY',
+  recent:   'RECENT',
   offline:  'OFFLINE',
+  inactive: 'INACTIVE',
+  error:    'ERROR',
 };
 
 const STATUS_DOT = {
   active:   '',
   awaiting: 'awaiting',
   standby:  'standby',
+  recent:   'standby',
   offline:  'dim',
+  inactive: 'dim',
+  error:    'offline',
 };
 
 const ROLES = {
