@@ -959,6 +959,12 @@ body {
   color: var(--error);
 }
 
+.pipeline-step--inactive {
+  border-style: dashed;
+  color: var(--text-faint);
+  opacity: 0.45;
+}
+
 .pipeline-step--selected {
   outline: 1px solid var(--mint);
   outline-offset: 1px;
