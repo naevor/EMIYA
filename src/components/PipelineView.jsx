@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 
 const CHAIN = ['INPUT', 'L-meta', 'L0/L1', 'validator', 'OUT'];
+const INACTIVE_STAGES = new Set(['L-meta', 'validator']);
 
 const DETAIL_ORDER = [
   ['model', 'MODEL'],
@@ -108,7 +109,13 @@ export default function PipelineView({ runs }) {
         <div className="pipeline-chain">
           {CHAIN.map((label) => {
             const step = getStep(run, label);
-            const state = step ? step.status : run?.status === 'active' && label === 'L0/L1' ? 'active' : 'idle';
+            const state = step
+              ? step.status
+              : INACTIVE_STAGES.has(label)
+                ? 'inactive'
+                : run?.status === 'active' && label === 'L0/L1'
+                  ? 'active'
+                  : 'idle';
             return (
               <button
                 key={label}
