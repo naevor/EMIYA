@@ -70,6 +70,10 @@ class MoodPipelineTests(unittest.TestCase):
         self.assertEqual(payloads[0]["options"]["seed"], mood_seed(mood_from_mapping(low_mood)))
         self.assertEqual(payloads[1]["options"]["seed"], mood_seed(mood_from_mapping(high_mood)))
         self.assertNotEqual(payloads[0]["options"]["seed"], payloads[1]["options"]["seed"])
+        self.assertEqual(payloads[0]["model"], "qwen3:4b-instruct-2507-q4_K_M")
+        self.assertEqual(payloads[0]["options"]["num_ctx"], 4096)
+        self.assertFalse(payloads[0]["think"])
+        self.assertEqual(payloads[0]["keep_alive"], "2m")
 
     def test_l1_request_options_are_regenerated_from_current_mood(self):
         low_context = {
