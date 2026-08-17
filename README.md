@@ -52,8 +52,8 @@ She will not close your tabs for you. She might ask why you have forty of them o
 
 ```
   ┌────────────────────────────────────────────────────────┐
-  │   PYTHON SERVER                                      │
-  │   websocket gateway · monitor · memory · telemetry    │
+  │   PYTHON SERVER                                        │
+  │   websocket gateway · monitor · memory · telemetry     │
   ├────────────────────┬───────────────────────────────────┤
   │   L0               │   L1                              │
   │   Qwen3 4B         │   Gemma4 e4b (experimental)       │
