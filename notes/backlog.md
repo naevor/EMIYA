@@ -15,3 +15,11 @@
 
 - Keep post-tag L1 polish out of Sprint 1.5.
   New voice regressions found after `v0.1-sprint1.5` should be recorded here unless they are severe enough to block Sprint 2.
+
+- Retrieval ranking can reinforce a repeated response motif instead of the requested fact.
+  The restart prompt contained `Naevor`, but both recent and relevant memory also contained `persistent string` assistant turns. The model repeated that motif instead of stating the name, so this can worsen as similar turns accumulate. Revisit ranking or turn-side selection after Sprint 2; persistence itself is working.
+
+## Sprint 3 deferred
+
+- Add VRAM usage and GPU temperature to the Decoding/Model Console telemetry.
+  Keep these fields unavailable in Sprint 2 until a real GPU metrics provider is wired; do not display synthetic values.
