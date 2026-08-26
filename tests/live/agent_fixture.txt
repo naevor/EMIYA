@@ -1,0 +1,2 @@
+EMIYA_B3_GROUNDING_TOKEN_7C91
+This file exists only to verify grounded live fs.read behavior.
