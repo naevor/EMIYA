@@ -4,6 +4,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from enum import Enum
+from collections.abc import Callable
 from typing import Any, Protocol
 
 from skills.base import SkillContext, SkillResult
@@ -124,6 +125,7 @@ class AgentLoop:
         registry: SkillRegistry,
         gate: GatePolicy,
         action_log: ActionLog | None = None,
+        on_step: Callable[[StepRecord], None] | None = None,
         *,
         max_steps: int = 6,
         invalid_retry_budget: int = 2,
@@ -139,6 +141,7 @@ class AgentLoop:
         self.registry = registry
         self.gate = gate
         self.action_log = action_log
+        self.on_step = on_step
         self.max_steps = int(max_steps)
         self.invalid_retry_budget = int(invalid_retry_budget)
         self.observation_cap_chars = int(observation_cap_chars)
@@ -207,6 +210,19 @@ class AgentLoop:
                     "Failed to write action log event %s for run %s",
                     action_ordinal,
                     resolved_run_id,
+                    exc_info=True,
+                )
+
+        def notify_step(step: StepRecord) -> None:
+            if self.on_step is None:
+                return
+            try:
+                self.on_step(step)
+            except Exception:
+                logger.warning(
+                    "Agent step callback failed for run %s step %s",
+                    resolved_run_id,
+                    step.index,
                     exc_info=True,
                 )
 
@@ -289,15 +305,15 @@ class AgentLoop:
                     content="identical action repeated; previous result already provided",
                     cap=self.observation_cap_chars,
                 )
-                steps.append(
-                    StepRecord(
-                        index=step_index,
-                        skill=decision.skill,
-                        args=step_args,
-                        status="repeat_blocked",
-                        observation=observation,
-                    )
+                step_record = StepRecord(
+                    index=step_index,
+                    skill=decision.skill,
+                    args=step_args,
+                    status="repeat_blocked",
+                    observation=observation,
                 )
+                steps.append(step_record)
+                notify_step(step_record)
                 log_event(
                     skill=decision.skill,
                     args=step_args,
@@ -357,15 +373,15 @@ class AgentLoop:
                     status = "ok" if skill_result.ok else "error"
                     duration_ms = skill_result.duration_ms
 
-            steps.append(
-                StepRecord(
-                    index=step_index,
-                    skill=decision.skill,
-                    args=step_args,
-                    status=status,
-                    observation=observation,
-                )
+            step_record = StepRecord(
+                index=step_index,
+                skill=decision.skill,
+                args=step_args,
+                status=status,
+                observation=observation,
             )
+            steps.append(step_record)
+            notify_step(step_record)
             log_event(
                 skill=decision.skill,
                 args=step_args,

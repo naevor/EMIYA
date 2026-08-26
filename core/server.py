@@ -8,12 +8,18 @@ import uuid
 from collections import deque
 from contextlib import suppress
 from datetime import datetime
+from pathlib import Path
 
 import websockets
 
+from agent.gate import GatePolicy
+from agent.loop import AgentLoop
+from memory.action_log import ActionLogStore
 from memory.retriever import MemoryRetriever
 from memory.store import MemoryStore
 from memory.writer import MemoryWriter
+from models.agent_provider import OllamaAgentProvider
+from monitor import db as monitor_db
 from monitor.db import (
     close_stale_sessions,
     end_session,
@@ -30,6 +36,9 @@ from monitor.trigger_engine import TriggerEngine
 from monitor.window_tracker import WindowTracker, get_app_time, get_switch_count
 from mood.engine import MoodEngine
 from personality.traits import TRAIT_KEYS, apply_preset, load_presets, load_traits, save_traits
+from routing.agent_service import AgentService, LIVE_OBSERVATION_CAP_CHARS
+from routing.pre_router import PreRouter, Route
+from skills import build_core_registry
 from telemetry.pipeline_log import pipeline_logger
 
 
@@ -111,6 +120,8 @@ class EmiyaServer:
         self._chat_log_dirty = threading.Event()
         self.mood_influence = deque(maxlen=50)
         self._shutdown_complete = False
+        self.pre_router = PreRouter(lambda: self.last_sys or None)
+        self.agent_service = self._build_agent_service()
 
     def get_l1(self):
         if self._l1 is None:
@@ -122,6 +133,55 @@ class EmiyaServer:
                 self._l1 = False
                 self._l1_status = "offline"
         return self._l1 if self._l1 else None
+
+    def _build_agent_service(self) -> AgentService:
+        from models import l1
+
+        host = os.getenv("EMIYA_OLLAMA_HOST", "http://127.0.0.1:11434")
+        # Provisional until the B5 model benchmark.
+        model = os.getenv("EMIYA_AGENT_MODEL", "qwen3:4b-instruct-2507-q4_K_M")
+        raw_roots = os.getenv("EMIYA_AGENT_ROOTS")
+        if raw_roots:
+            roots = [
+                Path(item.strip()).expanduser().resolve()
+                for item in raw_roots.split(os.pathsep)
+                if item.strip()
+            ]
+        else:
+            roots = [Path(__file__).resolve().parents[1]]
+
+        self._agent_provider_calls = deque(maxlen=16)
+        provider = OllamaAgentProvider(
+            host=host,
+            model=model,
+            observer=self._agent_provider_calls.append,
+        )
+        registry = build_core_registry(lambda: self.last_sys)
+        loop = AgentLoop(
+            provider,
+            registry,
+            GatePolicy(),
+            action_log=ActionLogStore(monitor_db.DB_PATH),
+            observation_cap_chars=LIVE_OBSERVATION_CAP_CHARS,
+        )
+
+        def consume_provider_call():
+            if not self._agent_provider_calls:
+                return None
+            return self._agent_provider_calls.popleft()
+
+        return AgentService(
+            loop,
+            allowed_roots=roots,
+            voice_fn=l1.voice_finalize,
+            conversation_store=self.memory_writer.write_conversation,
+            pipeline_logger=pipeline_logger,
+            mood_provider=self._mood_context,
+            traits_provider=lambda: self.traits.to_dict(),
+            voice_model=l1.MODEL,
+            provider_call_getter=consume_provider_call,
+            pipeline_dump_enabled=self.pipeline_dump_enabled,
+        )
 
     def analyze_state(self):
         states = set()
@@ -201,6 +261,112 @@ class EmiyaServer:
         self.last_sys = snapshot
 
     def handle_user_message(self, text):
+        route = self.pre_router.classify(text)
+        if route.route is Route.AGENT:
+            turn_id = uuid.uuid4().hex
+            result = asyncio.run(
+                self.agent_service.run(
+                    original_user_message=text,
+                    agent_task=route.task,
+                    run_id=turn_id,
+                )
+            )
+            self._record_routed_exchange(
+                text,
+                result.reply,
+                turn_id=turn_id,
+                source="agent",
+                route="agent",
+                model=self.agent_service.loop.provider.name,
+            )
+            return result.reply
+
+        if route.route is Route.CACHED or route.response is not None:
+            return self._handle_deterministic_route(text, route)
+
+        response = self._handle_chat_message(text)
+        self._last_reply_metadata["route"] = "chat"
+        return response
+
+    def _record_routed_exchange(
+        self,
+        user_text: str,
+        reply: str,
+        *,
+        turn_id: str,
+        source: str,
+        route: str,
+        model: str | None = None,
+    ) -> None:
+        mood = self._mood_context()
+        self.chat_history.extend(
+            [
+                {"role": "user", "content": user_text},
+                {"role": "assistant", "content": reply},
+            ]
+        )
+        log_chat_message(
+            session_id=self.session_id,
+            role="user",
+            content=user_text,
+            source="user",
+            turn_id=turn_id,
+            mood=mood,
+        )
+        log_chat_message(
+            session_id=self.session_id,
+            role="assistant",
+            content=reply,
+            source=source,
+            turn_id=turn_id,
+            model=model,
+            mood=mood,
+        )
+        self._chat_log_dirty.set()
+        self._last_reply_metadata = {
+            "source": source,
+            "model": model,
+            "thought": None,
+            "route": route,
+        }
+
+    def _handle_deterministic_route(self, text, route):
+        turn_id = uuid.uuid4().hex
+        reply = route.response or "telemetry is unavailable."
+        pipeline_logger.start_request(turn_id, text, {"route": route.route.value})
+        pipeline_logger.add_step(turn_id, "INPUT", details={"chars": len(text)})
+        pipeline_logger.add_step(
+            turn_id,
+            "ROUTE",
+            details={"route": route.route.value, "intent": route.intent},
+        )
+        if route.route is Route.CACHED:
+            pipeline_logger.add_step(
+                turn_id,
+                "CACHED",
+                details={"intent": route.intent, "response": reply[:500]},
+            )
+        source = "cached" if route.route is Route.CACHED else "router"
+        self._record_routed_exchange(
+            text,
+            reply,
+            turn_id=turn_id,
+            source=source,
+            route=route.route.value,
+        )
+        pipeline_logger.add_step(
+            turn_id,
+            "OUT",
+            details={"chars": len(reply), "source": source},
+        )
+        pipeline_logger.finish_request(
+            turn_id,
+            "ok",
+            dump=self.pipeline_dump_enabled,
+        )
+        return reply
+
+    def _handle_chat_message(self, text):
         turn_id = uuid.uuid4().hex
         mood = self._mood_context()
         context = self._build_context(user_text=text)

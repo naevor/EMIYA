@@ -273,6 +273,72 @@ def chat(messages: list, context: dict = None, return_metadata: bool = False) ->
         return None
 
 
+def _voice_finalize_prompt(
+    user_message: str,
+    facts: str,
+    actions_summary: str,
+) -> str:
+    safe_user = _safe_xml_text(user_message)
+    safe_facts = _safe_xml_text((facts or "")[:4000])
+    safe_actions = _safe_xml_text((actions_summary or "")[:500])
+    return f"""
+<agent_voice_task>
+  <user_request>{safe_user}</user_request>
+  <grounded_facts>{safe_facts}</grounded_facts>
+  <actions>{safe_actions}</actions>
+
+Answer the user in your normal voice using only grounded_facts and actions.
+Preserve every material fact needed to answer the user's request.
+Style may alter wording, but must not remove paths, filenames, error messages,
+line references, values, or other task-relevant facts.
+Do not invent details, claim actions not listed above, or mention this formatting.
+</agent_voice_task>
+""".strip()
+
+
+def voice_finalize(
+    user_message: str,
+    facts: str,
+    actions_summary: str,
+    mood: dict | None,
+    traits: dict | None,
+) -> str | None:
+    context = {"mood": mood or {}, "traits": traits or {}}
+    system = _build_system(context)
+    options = _build_options(context)
+
+    try:
+        response = requests.post(
+            OLLAMA_URL,
+            json={
+                "model": MODEL,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {
+                        "role": "user",
+                        "content": _voice_finalize_prompt(
+                            user_message,
+                            facts,
+                            actions_summary,
+                        ),
+                    },
+                ],
+                "stream": False,
+                "options": options,
+                "keep_alive": "5m",
+            },
+            timeout=90,
+        )
+        if response.status_code != 200:
+            return None
+        raw_text = response.json().get("message", {}).get("content", "").strip()
+        visible_text, _thought = split_thinking(raw_text)
+        return _clean(visible_text) or None
+    except Exception as e:
+        print(f"[L1] voice finalize error: {e}")
+        return None
+
+
 if __name__ == "__main__":
     ctx = {
         "active_min": 10,
