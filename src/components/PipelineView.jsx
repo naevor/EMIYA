@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react';
 
-const CHAIN = ['INPUT', 'L-meta', 'L0/L1', 'validator', 'OUT'];
+const LEGACY_CHAIN = ['INPUT', 'L-meta', 'L0/L1', 'validator', 'OUT'];
 const INACTIVE_STAGES = new Set(['L-meta', 'validator']);
+const AGENT_STAGES = new Set(['ROUTE', 'CACHED', 'DECIDE', 'TOOL', 'VOICE']);
+const GENERIC_DETAIL_CAP = 2000;
 
 const DETAIL_ORDER = [
   ['model', 'MODEL'],
@@ -21,10 +23,13 @@ function getStep(run, label) {
   return run?.steps?.find((step) => normalizeStepName(step.name) === label);
 }
 
-function stringify(value) {
+function stringify(value, maxChars = null) {
   if (value == null || value === '') return '';
-  if (typeof value === 'string') return value;
-  return JSON.stringify(value, null, 2);
+  const body = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+  if (maxChars != null && body.length > maxChars) {
+    return `${body.slice(0, maxChars)}\n...[truncated]`;
+  }
+  return body;
 }
 
 function formatMetrics(metrics) {
@@ -41,8 +46,8 @@ function formatMetrics(metrics) {
     .join('\n');
 }
 
-function DetailSection({ title, value, defaultOpen = false }) {
-  const body = title === 'METRICS' ? formatMetrics(value) : stringify(value);
+function DetailSection({ title, value, defaultOpen = false, maxChars = null }) {
+  const body = title === 'METRICS' ? formatMetrics(value) : stringify(value, maxChars);
   if (!body) return null;
 
   return (
@@ -82,7 +87,12 @@ function StepDrawer({ run, step, onClose }) {
       ))}
 
       {extraKeys.map((key) => (
-        <DetailSection key={key} title={key.toUpperCase()} value={details[key]} />
+        <DetailSection
+          key={key}
+          title={key.toUpperCase()}
+          value={details[key]}
+          maxChars={GENERIC_DETAIL_CAP}
+        />
       ))}
     </div>
   );
@@ -91,7 +101,26 @@ function StepDrawer({ run, step, onClose }) {
 export default function PipelineView({ runs }) {
   const [selected, setSelected] = useState(null);
   const run = runs?.length ? runs[runs.length - 1] : null;
-  const selectedStep = selected ? getStep(run, selected) : null;
+  const chainItems = useMemo(() => {
+    const hasAgentStages = run?.steps?.some((step) => AGENT_STAGES.has(step.name));
+    if (hasAgentStages) {
+      return run.steps.map((step, index) => ({
+        key: `${index}-${step.name}`,
+        label: step.name,
+        step,
+        legacy: false,
+      }));
+    }
+    return LEGACY_CHAIN.map((label) => ({
+      key: label,
+      label,
+      step: getStep(run, label),
+      legacy: true,
+    }));
+  }, [run]);
+  const selectedStep = selected
+    ? chainItems.find((item) => item.key === selected)?.step ?? null
+    : null;
 
   const statusLabel = useMemo(() => {
     if (!run) return 'IDLE';
@@ -107,21 +136,21 @@ export default function PipelineView({ runs }) {
       </div>
       <div className="panel__body">
         <div className="pipeline-chain">
-          {CHAIN.map((label) => {
-            const step = getStep(run, label);
+          {chainItems.map((item) => {
+            const { key, label, step, legacy } = item;
             const state = step
               ? step.status
-              : INACTIVE_STAGES.has(label)
+              : legacy && INACTIVE_STAGES.has(label)
                 ? 'inactive'
-                : run?.status === 'active' && label === 'L0/L1'
+                : legacy && run?.status === 'active' && label === 'L0/L1'
                   ? 'active'
                   : 'idle';
             return (
               <button
-                key={label}
+                key={key}
                 type="button"
-                className={`pipeline-step pipeline-step--${state}${selected === label ? ' pipeline-step--selected' : ''}`}
-                onClick={() => setSelected(selected === label ? null : label)}
+                className={`pipeline-step pipeline-step--${state}${selected === key ? ' pipeline-step--selected' : ''}`}
+                onClick={() => setSelected(selected === key ? null : key)}
               >
                 <span className="pipeline-step__label">{label}</span>
                 <span className="pipeline-step__latency">

@@ -9,6 +9,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 LOG_PATH = ROOT / "logs" / "pipeline.jsonl"
+AGENT_PIPELINE_STAGES = ("ROUTE", "CACHED", "DECIDE", "TOOL", "VOICE")
 
 
 def _now() -> str:
