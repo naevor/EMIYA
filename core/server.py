@@ -8,7 +8,6 @@ import uuid
 from collections import deque
 from contextlib import suppress
 from datetime import datetime
-from pathlib import Path
 
 import websockets
 
@@ -36,6 +35,7 @@ from monitor.trigger_engine import TriggerEngine
 from monitor.window_tracker import WindowTracker, get_app_time, get_switch_count
 from mood.engine import MoodEngine
 from personality.traits import TRAIT_KEYS, apply_preset, load_presets, load_traits, save_traits
+from routing.agent_config import load_agent_runtime_config, log_agent_runtime_config
 from routing.agent_service import AgentService, LIVE_OBSERVATION_CAP_CHARS
 from routing.pre_router import PreRouter, Route
 from skills import build_core_registry
@@ -137,23 +137,13 @@ class EmiyaServer:
     def _build_agent_service(self) -> AgentService:
         from models import l1
 
-        host = os.getenv("EMIYA_OLLAMA_HOST", "http://127.0.0.1:11434")
-        # Provisional until the B5 model benchmark.
-        model = os.getenv("EMIYA_AGENT_MODEL", "qwen3:4b-instruct-2507-q4_K_M")
-        raw_roots = os.getenv("EMIYA_AGENT_ROOTS")
-        if raw_roots:
-            roots = [
-                Path(item.strip()).expanduser().resolve()
-                for item in raw_roots.split(os.pathsep)
-                if item.strip()
-            ]
-        else:
-            roots = [Path(__file__).resolve().parents[1]]
+        config = load_agent_runtime_config()
+        log_agent_runtime_config(config)
 
         self._agent_provider_calls = deque(maxlen=16)
         provider = OllamaAgentProvider(
-            host=host,
-            model=model,
+            host=config.ollama_host,
+            model=config.model,
             observer=self._agent_provider_calls.append,
         )
         registry = build_core_registry(lambda: self.last_sys)
@@ -172,7 +162,7 @@ class EmiyaServer:
 
         return AgentService(
             loop,
-            allowed_roots=roots,
+            allowed_roots=list(config.allowed_roots),
             voice_fn=l1.voice_finalize,
             conversation_store=self.memory_writer.write_conversation,
             pipeline_logger=pipeline_logger,

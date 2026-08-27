@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / "core"))
 from agent.gate import GatePolicy
 from agent.loop import AgentLoop, RunStatus
 from models.agent_provider import OllamaAgentProvider
+from routing.agent_config import load_agent_runtime_config
 from skills import build_core_registry
 from skills.base import SkillContext
 
@@ -23,8 +24,9 @@ GROUNDING_TOKEN = "EMIYA_B3_GROUNDING_TOKEN_7C91"
 class LiveAgentTests(unittest.IsolatedAsyncioTestCase):
     async def test_agent_reads_real_file_with_grounded_facts(self):
         runs = max(1, int(os.getenv("EMIYA_LIVE_RUNS", "10")))
-        model = os.getenv("EMIYA_AGENT_MODEL", "qwen3:4b-instruct-2507-q4_K_M")
-        host = os.getenv("EMIYA_OLLAMA_HOST", "http://127.0.0.1:11434")
+        config = load_agent_runtime_config()
+        model = config.model
+        host = config.ollama_host
         fixture = "tests/live/agent_fixture.txt"
         successes = 0
 
@@ -39,7 +41,7 @@ class LiveAgentTests(unittest.IsolatedAsyncioTestCase):
             )
             result = await loop.run(
                 f"read {fixture} and tell me exactly what is in the first line",
-                SkillContext([ROOT], f"live-b3-{index}"),
+                SkillContext(list(config.allowed_roots), f"live-b3-{index}"),
             )
             used_fs_read = any(
                 step.skill == "fs.read" and step.status == "ok" for step in result.steps
